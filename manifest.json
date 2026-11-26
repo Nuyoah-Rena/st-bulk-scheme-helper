@@ -1,0 +1,11 @@
+{
+      "display_name": "批量编辑与开关方案助手",
+        "loading_order": 100,
+          "requires": [],
+            "optional": [],
+              "js": "index.js",
+                "css": "style.css",
+                  "author": "Custom",
+                    "version": "1.0.1",
+                      "homePage": ""
+                      }
