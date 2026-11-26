@@ -18,7 +18,7 @@ SillyTavern（酒馆）扩展。给**预设条目**和**世界书条目**加上�
 
 1. 打开酒馆，点顶部 🧩「扩展」
 2. 点「安装扩展」
-3. 粘贴本仓库地址：`https://github.com/你的用户名/仓库名`
+3. 粘贴本仓库地址：`[https://github.com/你的用户名/仓库名](https://github.com/Nuyoah-Rena/st-bulk-scheme-helper)`
 4. 点「安装」，装好后刷新页面
 
 装好后打开预设面板的提示词列表，或者打开世界书，列表上方会多出一条工具栏。
