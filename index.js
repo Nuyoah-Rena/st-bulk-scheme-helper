@@ -504,6 +504,7 @@
             ${drifted ? '<span class="st-bs-drift-dot" title="预设有变动，点开查看详情"></span>' : ''}
           </div>
           <div class="st-bs-scheme-row-actions">
+            <button type="button" class="st-bs-scheme-row-btn st-bs-bind-btn${countSchemeBindings(mode, targetName, name) ? ' has-bind' : ''}" data-row-act="bind" title="绑定聊天窗口">${LINK_SVG}${countSchemeBindings(mode, targetName, name) ? `<span class="st-bs-bind-badge">${countSchemeBindings(mode, targetName, name)}</span>` : ''}</button>
             <button type="button" class="st-bs-scheme-row-btn" data-row-act="rename" title="重命名此方案">${PENCIL_SVG}</button>
             <button type="button" class="st-bs-scheme-row-btn" data-row-act="overwrite" title="用当前开关覆盖此方案"><i class="fa-solid fa-floppy-disk"></i></button>
             <button type="button" class="st-bs-scheme-row-btn danger" data-row-act="del" title="删除此方案"><i class="fa-solid fa-trash-can"></i></button>
@@ -512,6 +513,9 @@
 
         row.querySelector('.st-bs-scheme-row-main').onclick = () => {
           showSchemeDetailPopup(bd, mode, targetName, name);
+        };
+        row.querySelector('[data-row-act="bind"]').onclick = () => {
+          showChatBindPopup(bd, mode, targetName, name);
         };
         row.querySelector('[data-row-act="rename"]').onclick = () => {
           openSubPopup(bd, (box, closeSub) => {
@@ -538,6 +542,9 @@
               Object.keys(schemes).forEach((k) => delete schemes[k]);
               Object.assign(schemes, rebuilt);
               if (activeMap[targetName] === name) activeMap[targetName] = nextName;
+              Object.values(getChatBindings(mode)).forEach((b) => {
+                if (b && b.targetName === targetName && b.schemeName === name) b.schemeName = nextName;
+              });
               persistStore();
               refreshSchemeButton(mode);
               notify('success', `已重命名为「${nextName}」`);
@@ -563,6 +570,10 @@
           if (ok) {
             if (bucket[targetName]) delete bucket[targetName][name];
             if (activeMap[targetName] === name) delete activeMap[targetName];
+            const bMap = getChatBindings(mode);
+            Object.keys(bMap).forEach((k) => {
+              if (bMap[k] && bMap[k].targetName === targetName && bMap[k].schemeName === name) delete bMap[k];
+            });
             persistStore();
             refreshSchemeButton(mode);
             notify('info', `已删除方案「${name}」`);
@@ -853,8 +864,353 @@
     notify('success', `已存入方案「${schemeName}」（共 ${countEntries(snap)} 条）`);
   }
 
-  async function applyScheme(mode, schemeName) {
-    const targetName = mode === 'preset' ? getPresetName() : getWorldName();
+  /* ================== 方案绑定聊天窗口（🔗 父级角色卡 -> 聊天窗口 -> 自动切换） ================== */
+  const LINK_SVG = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+  const normChatId = (id) => String(id ?? '').trim().replace(/\.jsonl$/i, '');
+  const makeChatKey = (avatar, chatName) => `${avatar}::${normChatId(chatName)}`;
+
+  function getChatBindings(mode) {
+    const s = getRawStore();
+    if (!s.chatBindings || typeof s.chatBindings !== 'object') s.chatBindings = { preset: {}, world: {} };
+    if (!s.chatBindings[mode] || typeof s.chatBindings[mode] !== 'object') s.chatBindings[mode] = {};
+    return s.chatBindings[mode];
+  }
+
+  function countSchemeBindings(mode, targetName, schemeName) {
+    const all = getChatBindings(mode);
+    return Object.values(all).filter((b) => b && b.targetName === targetName && b.schemeName === schemeName).length;
+  }
+
+  function getCurrentActiveChatInfo() {
+    const ctx = getCtx();
+    if (ctx.groupId) return null;
+    const chid = ctx.characterId;
+    const char = (chid !== undefined && chid !== null && Array.isArray(ctx.characters)) ? ctx.characters[Number(chid)] : null;
+    if (!char || !char.avatar) return null;
+    const chatName = normChatId(ctx.chatId || char.chat);
+    if (!chatName) return null;
+    return {
+      charAvatar: char.avatar,
+      charName: String(char.name || char.avatar).trim(),
+      chatName,
+      chatKey: makeChatKey(char.avatar, chatName),
+    };
+  }
+
+  function createMiniAvatarEl(char) {
+    const img = document.createElement('img');
+    img.className = 'st-bs-bind-avatar';
+    img.alt = char.name || '';
+    img.loading = 'lazy';
+    const file = encodeURIComponent(char.avatar || '');
+    img.src = `/thumbnail?type=avatar&file=${file}`;
+    img.onerror = () => {
+      if (!img.dataset.fb) {
+        img.dataset.fb = '1';
+        img.src = `/characters/${file}`;
+      } else {
+        const fb = document.createElement('span');
+        fb.className = 'st-bs-bind-avatar-fallback';
+        fb.textContent = String(char.name || '?').trim().slice(0, 1);
+        img.replaceWith(fb);
+      }
+    };
+    return img;
+  }
+
+  async function fetchCharacterChats(avatarUrl) {
+    const ctx = getCtx();
+    const headers = typeof ctx.getRequestHeaders === 'function'
+      ? ctx.getRequestHeaders()
+      : { 'Content-Type': 'application/json' };
+    const res = await fetch('/api/characters/chats', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ avatar_url: avatarUrl }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const raw = await res.json();
+    const arr = Array.isArray(raw) ? raw : Object.values(raw || {});
+    return arr
+      .filter((x) => x && typeof x === 'object' && x.file_name)
+      .sort((a, b) => {
+        const ta = Date.parse(a.last_mes || '') || 0;
+        const tb = Date.parse(b.last_mes || '') || 0;
+        return tb - ta;
+      });
+  }
+
+  function toggleChatBinding(mode, targetName, schemeName, info) {
+    const map = getChatBindings(mode);
+    const existing = map[info.chatKey];
+    if (existing && existing.targetName === targetName && existing.schemeName === schemeName) {
+      delete map[info.chatKey];
+      persistStore();
+      notify('info', `已取消绑定「${info.chatName}」`);
+      return false;
+    }
+    const prevScheme = existing ? existing.schemeName : '';
+    map[info.chatKey] = {
+      targetName,
+      schemeName,
+      charAvatar: info.charAvatar,
+      charName: info.charName,
+      chatName: info.chatName,
+    };
+    persistStore();
+    notify('success', prevScheme && prevScheme !== schemeName
+      ? `已从「${prevScheme}」改绑到方案「${schemeName}」`
+      : `已绑定到方案「${schemeName}」`);
+    return true;
+  }
+
+  function showChatBindPopup(bd, mode, targetName, schemeName) {
+    openSubPopup(bd, (box, closeSub) => {
+      box.classList.add('st-bs-bind-card');
+      const finish = () => {
+        closeSub();
+        showSchemePickerModal(mode);
+      };
+
+      /* ===== 第 1 级：父级角色卡列表（带圆形小头像） ===== */
+      let charQuery = '';
+      const drawChars = () => {
+        const ctx = getCtx();
+        const chars = Array.isArray(ctx.characters) ? ctx.characters.filter((c) => c && c.avatar) : [];
+        const bindings = getChatBindings(mode);
+        const curChat = getCurrentActiveChatInfo();
+
+        const countForChar = (avatar, onlyThisScheme) => Object.values(bindings).filter((b) => {
+          if (!b || b.charAvatar !== avatar) return false;
+          return onlyThisScheme ? (b.targetName === targetName && b.schemeName === schemeName) : true;
+        }).length;
+
+        const isCurBound = Boolean(curChat && bindings[curChat.chatKey]
+          && bindings[curChat.chatKey].targetName === targetName
+          && bindings[curChat.chatKey].schemeName === schemeName);
+
+        box.innerHTML = `
+          <div class="st-bs-modal-title">绑定聊天窗口 · ${escapeHtml(schemeName)}</div>
+          <div class="st-bs-modal-desc">点角色卡进入它的聊天窗口，选择后打开该窗口即自动切到此方案。</div>
+          ${curChat ? `<div class="st-bs-bind-cur">
+            <span class="st-bs-bind-cur-text">当前：${escapeHtml(curChat.charName)} · ${escapeHtml(curChat.chatName)}</span>
+            <button type="button" class="st-bs-bind-cur-btn${isCurBound ? ' bound' : ''}" data-bind-cur>${isCurBound ? '已绑定' : '绑定当前'}</button>
+          </div>` : ''}
+          <div class="st-bs-search-capsule st-bs-bind-search">
+            <input type="text" class="st-bs-search-input" placeholder="搜索角色卡名称…" />
+          </div>
+          <div class="st-bs-subpop-list" data-role="char-list"></div>
+          <div class="st-bs-modal-actions">
+            <button type="button" class="st-bs-btn st-bs-btn-primary" data-sub="done">完成</button>
+          </div>`;
+
+        const ul = box.querySelector('[data-role="char-list"]');
+        const searchInput = box.querySelector('.st-bs-search-input');
+        searchInput.value = charQuery;
+
+        const renderCharRows = () => {
+          const q = charQuery.trim().toLowerCase();
+          const list = chars
+            .filter((c) => !q || String(c.name || '').toLowerCase().includes(q))
+            .slice()
+            .sort((a, b) => {
+              const ba = countForChar(a.avatar, true);
+              const bb = countForChar(b.avatar, true);
+              if (bb !== ba) return bb - ba;
+              const ca = curChat && a.avatar === curChat.charAvatar ? 1 : 0;
+              const cb = curChat && b.avatar === curChat.charAvatar ? 1 : 0;
+              if (cb !== ca) return cb - ca;
+              return String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN');
+            });
+
+          ul.innerHTML = '';
+          if (!list.length) {
+            ul.innerHTML = '<div class="st-bs-sel-empty">没有找到角色卡。</div>';
+            return;
+          }
+          list.forEach((c) => {
+            const thisCnt = countForChar(c.avatar, true);
+            const otherCnt = countForChar(c.avatar, false) - thisCnt;
+            const row = document.createElement('div');
+            row.className = 'st-bs-bind-char-row';
+            row.appendChild(createMiniAvatarEl(c));
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'st-bs-bind-char-name';
+            nameEl.textContent = c.name || c.avatar;
+            row.appendChild(nameEl);
+
+            if (thisCnt > 0) {
+              const pill = document.createElement('span');
+              pill.className = 'st-bs-bind-pill';
+              pill.textContent = `已绑 ${thisCnt}`;
+              row.appendChild(pill);
+            } else if (otherCnt > 0) {
+              const pill = document.createElement('span');
+              pill.className = 'st-bs-bind-pill other';
+              pill.textContent = `他案 ${otherCnt}`;
+              row.appendChild(pill);
+            }
+
+            const arrow = document.createElement('i');
+            arrow.className = 'fa-solid fa-chevron-right';
+            arrow.style.cssText = 'opacity:.4;font-size:11px;flex-shrink:0;';
+            row.appendChild(arrow);
+
+            row.onclick = () => drawChats(c);
+            ul.appendChild(row);
+          });
+        };
+
+        searchInput.addEventListener('input', () => {
+          charQuery = searchInput.value;
+          renderCharRows();
+        });
+        box.querySelector('[data-bind-cur]')?.addEventListener('click', () => {
+          if (!curChat) return;
+          toggleChatBinding(mode, targetName, schemeName, curChat);
+          drawChars();
+        });
+        box.querySelector('[data-sub="done"]').onclick = finish;
+        renderCharRows();
+      };
+
+      /* ===== 第 2 级：该角色卡的聊天窗口列表 ===== */
+      const drawChats = async (char) => {
+        const curChat = getCurrentActiveChatInfo();
+        box.innerHTML = `
+          <div class="st-bs-bind-chat-header" data-role="ch-head">
+            <div style="flex:1;min-width:0;">
+              <div class="st-bs-modal-title" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
+              <div class="st-bs-modal-desc" style="margin:2px 0 0;">绑定到方案「${escapeHtml(schemeName)}」</div>
+            </div>
+          </div>
+          <div class="st-bs-subpop-list st-bs-subpop-cards" data-role="chat-list">
+            <div class="st-bs-sel-empty">正在加载聊天窗口…</div>
+          </div>
+          <div class="st-bs-modal-actions">
+            <button type="button" class="st-bs-btn" data-sub="back">返回角色卡</button>
+            <button type="button" class="st-bs-btn st-bs-btn-primary" data-sub="done">完成</button>
+          </div>`;
+
+        const head = box.querySelector('[data-role="ch-head"]');
+        head.insertBefore(createMiniAvatarEl(char), head.firstChild);
+        head.querySelector('.st-bs-modal-title').textContent = char.name || char.avatar;
+        box.querySelector('[data-sub="back"]').onclick = drawChars;
+        box.querySelector('[data-sub="done"]').onclick = finish;
+
+        const ul = box.querySelector('[data-role="chat-list"]');
+        let chats = [];
+        try {
+          chats = await fetchCharacterChats(char.avatar);
+        } catch (err) {
+          console.error('[批量方案助手] 读取角色聊天列表失败:', err);
+          ul.innerHTML = '<div class="st-bs-sel-empty">读取聊天窗口失败，请稍后重试。</div>';
+          return;
+        }
+
+        const renderChatRows = () => {
+          const bindings = getChatBindings(mode);
+          ul.innerHTML = '';
+          if (!chats.length) {
+            ul.innerHTML = '<div class="st-bs-sel-empty">这张角色卡还没有聊天记录。</div>';
+            return;
+          }
+          chats.forEach((ch) => {
+            const chatName = normChatId(ch.file_name);
+            const chatKey = makeChatKey(char.avatar, chatName);
+            const b = bindings[chatKey];
+            const isBoundThis = Boolean(b && b.targetName === targetName && b.schemeName === schemeName);
+            const isBoundOther = Boolean(b && !isBoundThis);
+            const isCurrent = Boolean(curChat && curChat.chatKey === chatKey);
+
+            const row = document.createElement('div');
+            row.className = 'st-bs-bind-chat-row' + (isBoundThis ? ' bound' : '');
+            const snip = String(ch.mes || '').replace(/\s+/g, ' ').trim();
+            const metaParts = [];
+            if (ch.chat_items != null) metaParts.push(`${ch.chat_items} 条消息`);
+            if (ch.last_mes) metaParts.push(String(ch.last_mes));
+
+            row.innerHTML = `
+              <span class="st-bs-bind-chat-check">
+                <i class="fa-${isBoundThis ? 'solid fa-circle-check' : 'regular fa-circle'}" style="opacity:${isBoundThis ? 1 : 0.4};"></i>
+              </span>
+              <div class="st-bs-bind-chat-body">
+                <div class="st-bs-bind-chat-title">
+                  <span></span>
+                  ${isCurrent ? '<span class="st-bs-bind-pill">当前</span>' : ''}
+                  ${isBoundOther ? `<span class="st-bs-bind-pill other">已绑：${escapeHtml(b.schemeName)}</span>` : ''}
+                </div>
+                ${metaParts.length ? `<div class="st-bs-bind-chat-meta">${escapeHtml(metaParts.join(' · '))}</div>` : ''}
+                ${snip ? `<div class="st-bs-bind-chat-snip">${escapeHtml(snip.slice(0, 80))}</div>` : ''}
+              </div>`;
+            row.querySelector('.st-bs-bind-chat-title span').textContent = chatName;
+            row.onclick = () => {
+              toggleChatBinding(mode, targetName, schemeName, {
+                charAvatar: char.avatar,
+                charName: String(char.name || char.avatar).trim(),
+                chatName,
+                chatKey,
+              });
+              renderChatRows();
+            };
+            ul.appendChild(row);
+          });
+        };
+
+        renderChatRows();
+      };
+
+      drawChars();
+    });
+  }
+
+  let chatBindTimer = null;
+  let lastAutoChatKey = '';
+  let lastAutoChatTs = 0;
+
+  function scheduleChatBindApply(evChatId) {
+    clearTimeout(chatBindTimer);
+    chatBindTimer = setTimeout(async () => {
+      try {
+        const ctx = getCtx();
+        if (ctx.groupId) return;
+        const chid = ctx.characterId;
+        const char = (chid !== undefined && chid !== null && Array.isArray(ctx.characters)) ? ctx.characters[Number(chid)] : null;
+        if (!char || !char.avatar) return;
+        const chatName = normChatId(evChatId || ctx.chatId || char.chat);
+        if (!chatName) return;
+        const chatKey = makeChatKey(char.avatar, chatName);
+        const now = Date.now();
+        if (chatKey === lastAutoChatKey && now - lastAutoChatTs < 700) return;
+        lastAutoChatKey = chatKey;
+        lastAutoChatTs = now;
+
+        const pBind = getChatBindings('preset')[chatKey];
+        if (pBind && pBind.schemeName) {
+          if (isPresetDataReady() && getPresetName() === pBind.targetName) {
+            const schemes = getStore().presetSchemes[pBind.targetName] || {};
+            if (Object.prototype.hasOwnProperty.call(schemes, pBind.schemeName)) {
+              await applyScheme('preset', pBind.schemeName, { targetName: pBind.targetName, prefix: '已自动切换绑定方案' });
+            }
+          }
+        }
+
+        const wBind = getChatBindings('world')[chatKey];
+        if (wBind && wBind.schemeName && wBind.targetName) {
+          const wSchemes = getStore().worldSchemes[wBind.targetName] || {};
+          if (Object.prototype.hasOwnProperty.call(wSchemes, wBind.schemeName)) {
+            await applyScheme('world', wBind.schemeName, { targetName: wBind.targetName, prefix: '已自动切换绑定世界书方案' });
+          }
+        }
+      } catch (err) {
+        console.error('[批量方案助手] 自动切换绑定方案异常:', err);
+      }
+    }, 260);
+  }
+
+  async function applyScheme(mode, schemeName, opts = {}) {
+    const targetName = opts.targetName || (mode === 'preset' ? getPresetName() : getWorldName());
     if (!targetName || !schemeName) return;
     const store = getStore();
     const bucket = mode === 'preset' ? store.presetSchemes : store.worldSchemes;
@@ -911,7 +1267,8 @@
     activeMap[targetName] = schemeName;
     persistStore();
     refreshSchemeButton(mode);
-    notify('success', `已切换方案「${schemeName}」（开 ${onC} / 关 ${offC}${groupC ? `，切换分组供电 ${groupC} 个` : ''}）`);
+    const label = opts.prefix || '已切换方案';
+    notify('success', `${label}「${schemeName}」（开 ${onC} / 关 ${offC}${groupC ? `，切换分组供电 ${groupC} 个` : ''}）`);
   }
 
   /* ================== 批量操作 ================== */
@@ -2863,6 +3220,7 @@
       const sync = () => { mountBars(); refreshSchemeButton('preset'); refreshSchemeButton('world'); updateDockUI(); };
       if (ctx.event_types.SETTINGS_LOADED) ctx.eventSource.on(ctx.event_types.SETTINGS_LOADED, sync);
       if (ctx.event_types.PRESET_CHANGED) ctx.eventSource.on(ctx.event_types.PRESET_CHANGED, sync);
+      if (ctx.event_types.CHAT_CHANGED) ctx.eventSource.on(ctx.event_types.CHAT_CHANGED, (cid) => scheduleChatBindApply(cid));
     }
 
     setInterval(() => { if (state.preset.bulk || state.world.bulk) updateDockUI(); }, 450);
