@@ -474,11 +474,18 @@
     const names = Object.keys(bucket[targetName] || {});
     const cur = activeMap[targetName] || '';
 
+    const curChat = getCurrentActiveChatInfo();
+    const curBind = curChat ? getChatBindings(mode)[curChat.chatKey] : null;
+    const curBindLabel = curBind
+      ? (curBind.targetName === targetName ? curBind.schemeName : `${curBind.targetName} · ${curBind.schemeName}`)
+      : '';
+
     const bd = ensureModal(), card = bd.querySelector('.st-bs-modal-card');
     card.innerHTML = `
       <div class="st-bs-modal-title">切换开关方案</div>
       <div class="st-bs-modal-desc">当前${mode === 'preset' ? '预设' : '世界书'}：「${targetName}」</div>
       ${mode === 'preset' && names.length ? '<button type="button" class="st-bs-btn" data-act="refresh" style="width:100%;margin:0 0 10px;"><i class="fa-solid fa-rotate"></i> 刷新全部方案</button>' : ''}
+      ${curBind ? `<button type="button" class="st-bs-btn" data-act="unbind-cur" style="width:100%;margin:0 0 10px;color:#c94a5a;border-color:rgba(201,74,90,0.38);"><i class="fa-solid fa-link-slash"></i> 解绑当前聊天窗口（已绑：${escapeHtml(curBindLabel)}）</button>` : ''}
       <div class="st-bs-scheme-list"></div>
       <div class="st-bs-modal-actions">
         <button type="button" class="st-bs-btn" data-act="close">关闭</button>
@@ -593,6 +600,19 @@
     card.querySelector('[data-act="add"]').onclick = () => showSaveSchemeModal(mode, false, '');
     const refreshBtn = card.querySelector('[data-act="refresh"]');
     if (refreshBtn) refreshBtn.onclick = () => refreshAllPresetSchemes();
+    const unbindCurBtn = card.querySelector('[data-act="unbind-cur"]');
+    if (unbindCurBtn) {
+      unbindCurBtn.onclick = () => {
+        if (!curChat) return;
+        const bMap = getChatBindings(mode);
+        const old = bMap[curChat.chatKey];
+        if (!old) return;
+        delete bMap[curChat.chatKey];
+        persistStore();
+        notify('info', `已解绑当前聊天窗口（原绑定：${old.schemeName}）`);
+        showSchemePickerModal(mode);
+      };
+    }
     bd.onclick = (e) => { if (e.target === bd) closeModal(); };
     bd.classList.add('open');
   }
