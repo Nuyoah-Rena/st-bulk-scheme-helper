@@ -1637,6 +1637,352 @@
     if (btnText.textContent !== text) btnText.textContent = text;
   }
 
+  /* ================== iOS 液态磨砂玻璃：编辑卡片 + 字体大小 ================== */
+  const RESIZE_CORNER_SVG = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M13 7L7 13"/><path d="M13 11L11 13"/></svg>';
+
+  function getWidgetLayout(mode) {
+    const s = getRawStore();
+    s.widgetLayout ||= {};
+    return s.widgetLayout[mode] || null;
+  }
+
+  function saveWidgetLayout(mode, layout) {
+    const s = getRawStore();
+    s.widgetLayout ||= {};
+    if (layout && Object.keys(layout).length) s.widgetLayout[mode] = layout;
+    else delete s.widgetLayout[mode];
+    persistStore();
+  }
+
+  function applyWidgetLayout(bar, mode) {
+    const l = getWidgetLayout(mode);
+    if (!l) {
+      bar.classList.remove('st-bs-widget-custom', 'st-bs-has-fs');
+      bar.style.left = '';
+      bar.style.top = '';
+      bar.style.width = '';
+      bar.style.minHeight = '';
+      bar.style.zIndex = '';
+      bar.style.removeProperty('--st-bs-fs');
+      return;
+    }
+    const hasSize = Number.isFinite(l.w) || Number.isFinite(l.h);
+    bar.classList.toggle('st-bs-widget-custom', hasSize);
+    bar.style.left = Number.isFinite(l.x) ? `${l.x}px` : '';
+    bar.style.top = Number.isFinite(l.y) ? `${l.y}px` : '';
+    bar.style.width = Number.isFinite(l.w) ? `${l.w}px` : '';
+    bar.style.minHeight = Number.isFinite(l.h) ? `${l.h}px` : '';
+    bar.style.zIndex = (l.x || l.y) ? '30' : '';
+    if (Number.isFinite(l.fontSize)) {
+      bar.classList.add('st-bs-has-fs');
+      bar.style.setProperty('--st-bs-fs', `${l.fontSize}px`);
+    } else {
+      bar.classList.remove('st-bs-has-fs');
+      bar.style.removeProperty('--st-bs-fs');
+    }
+  }
+
+  function closeGlassMenu() {
+    document.getElementById('st-bs-glass-backdrop')?.remove();
+  }
+
+  function bindGlassOutsideDismiss(bd, panel, onDismiss) {
+    bd.style.height = `${window.innerHeight}px`;
+    const openedAt = Date.now();
+    let closed = false;
+    const handler = (e) => {
+      if (closed) return;
+      if (panel.contains(e.target)) return;
+      if (Date.now() - openedAt < 220) return;
+      closed = true;
+      e.preventDefault();
+      e.stopPropagation();
+      onDismiss();
+    };
+    ['touchstart', 'pointerdown', 'mousedown', 'click'].forEach((evt) => {
+      bd.addEventListener(evt, handler, { passive: false });
+    });
+  }
+
+  function placeGlassPopover(bar, el, estW, estH) {
+    const br = bar.getBoundingClientRect();
+    const left = Math.min(window.innerWidth - estW - 12, Math.max(12, br.left + br.width / 2 - estW / 2));
+    const top = (br.bottom + estH + 14 < window.innerHeight) ? (br.bottom + 8) : Math.max(12, br.top - estH - 8);
+    el.style.left = `${Math.round(left)}px`;
+    el.style.top = `${Math.round(top)}px`;
+  }
+
+  function openFontSizeGlassBar(bar, mode) {
+    closeGlassMenu();
+    const bd = document.createElement('div');
+    bd.id = 'st-bs-glass-backdrop';
+    stopDrawerClose(bd);
+
+    const saved = { ...(getWidgetLayout(mode) || {}) };
+    let fs = Number.isFinite(saved.fontSize) ? saved.fontSize : 12.5;
+
+    const panel = document.createElement('div');
+    panel.className = 'st-bs-glass-menu st-bs-glass-fs';
+    panel.innerHTML = `
+      <button type="button" class="st-bs-glass-fs-step" data-step="-0.5">A-</button>
+      <input type="range" class="st-bs-glass-fs-range" min="10" max="18" step="0.5" value="${fs}" />
+      <button type="button" class="st-bs-glass-fs-step" data-step="0.5">A+</button>
+      <span class="st-bs-glass-fs-val">${fs}px</span>
+      <button type="button" class="st-bs-glass-fs-ok" title="确认字号"><i class="fa-solid fa-check"></i></button>`;
+
+    placeGlassPopover(bar, panel, 272, 54);
+
+    const range = panel.querySelector('.st-bs-glass-fs-range');
+    const valEl = panel.querySelector('.st-bs-glass-fs-val');
+    const setFs = (v) => {
+      fs = Math.round(Math.min(18, Math.max(10, Number(v))) * 2) / 2;
+      range.value = String(fs);
+      valEl.textContent = `${fs}px`;
+      bar.classList.add('st-bs-has-fs');
+      bar.style.setProperty('--st-bs-fs', `${fs}px`);
+    };
+
+    range.addEventListener('input', () => setFs(range.value));
+    panel.querySelectorAll('[data-step]').forEach((btn) => {
+      btn.onclick = () => setFs(fs + Number(btn.getAttribute('data-step')));
+    });
+
+    const commit = () => {
+      saved.fontSize = fs;
+      saveWidgetLayout(mode, saved);
+      applyWidgetLayout(bar, mode);
+      closeGlassMenu();
+      notify('success', `字体大小已设为 ${fs}px`);
+    };
+
+    panel.querySelector('.st-bs-glass-fs-ok').onclick = commit;
+    bindGlassOutsideDismiss(bd, panel, commit);
+    bd.appendChild(panel);
+    document.documentElement.appendChild(bd);
+  }
+
+  function enterWidgetEditMode(bar, mode) {
+    if (bar.classList.contains('st-bs-widget-editing')) return;
+    bar.classList.add('st-bs-widget-editing');
+
+    const saved = getWidgetLayout(mode) || {};
+    const cur = {
+      x: Number.isFinite(saved.x) ? saved.x : 0,
+      y: Number.isFinite(saved.y) ? saved.y : 0,
+      w: Number.isFinite(saved.w) ? saved.w : null,
+      h: Number.isFinite(saved.h) ? saved.h : null,
+      fontSize: Number.isFinite(saved.fontSize) ? saved.fontSize : null,
+    };
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'st-bs-w-ctrl st-bs-w-confirm';
+    confirmBtn.title = '确认位置与大小';
+    confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
+    bar.appendChild(confirmBtn);
+
+    const resizeHandle = document.createElement('span');
+    resizeHandle.className = 'st-bs-w-ctrl st-bs-w-resize';
+    resizeHandle.title = '拖动调整大小';
+    resizeHandle.innerHTML = RESIZE_CORNER_SVG;
+    bar.appendChild(resizeHandle);
+
+    let activeDrag = false;
+    const preventScroll = (ev) => { if (activeDrag) ev.preventDefault(); };
+    const MARGIN = 6;
+
+    // 整个卡片任意位置按住都能拖动（自动锁死左右边界，绝不拖出屏幕）
+    const onCardDragDown = (e) => {
+      if (!bar.classList.contains('st-bs-widget-editing')) return;
+      if (e.target?.closest?.('.st-bs-w-resize, .st-bs-w-confirm')) return;
+      if (e.button && e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      activeDrag = true;
+      try { bar.setPointerCapture(e.pointerId); } catch (_) {}
+
+      const rect = bar.getBoundingClientRect();
+      const baseLeft = rect.left - cur.x;
+      const minX = Math.round(MARGIN - baseLeft);
+      const maxX = Math.max(minX, Math.round(window.innerWidth - MARGIN - rect.width - baseLeft));
+      const pid = e.pointerId, sx = e.clientX, sy = e.clientY, ox = cur.x, oy = cur.y;
+
+      const onMove = (ev) => {
+        if (!activeDrag || ev.pointerId !== pid) return;
+        ev.preventDefault();
+        const rawX = Math.round(ox + (ev.clientX - sx));
+        cur.x = Math.min(maxX, Math.max(minX, rawX));
+        cur.y = Math.round(oy + (ev.clientY - sy));
+        bar.style.left = `${cur.x}px`;
+        bar.style.top = `${cur.y}px`;
+      };
+      const finish = (ev) => {
+        if (!activeDrag || (ev && ev.pointerId !== pid)) return;
+        activeDrag = false;
+        document.removeEventListener('touchmove', preventScroll, { passive: false });
+        window.removeEventListener('pointermove', onMove, { passive: false });
+        window.removeEventListener('pointerup', finish);
+        window.removeEventListener('pointercancel', finish);
+        try { bar.releasePointerCapture(pid); } catch (_) {}
+      };
+      document.addEventListener('touchmove', preventScroll, { passive: false });
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+    };
+    bar.addEventListener('pointerdown', onCardDragDown);
+
+    // 右下角拖动大小（最大宽度锁死到屏幕右边缘，绝不拉出屏）
+    resizeHandle.addEventListener('pointerdown', (e) => {
+      if (e.button && e.button !== 0) return;
+      e.preventDefault(); e.stopPropagation();
+      activeDrag = true;
+      try { resizeHandle.setPointerCapture(e.pointerId); } catch (_) {}
+
+      const rect = bar.getBoundingClientRect();
+      const pid = e.pointerId, sx = e.clientX, sy = e.clientY;
+      const ow = rect.width, oh = rect.height;
+      const maxW = Math.max(176, Math.floor(window.innerWidth - MARGIN - Math.max(MARGIN, rect.left)));
+
+      const onMove = (ev) => {
+        if (!activeDrag || ev.pointerId !== pid) return;
+        ev.preventDefault();
+        cur.w = Math.round(Math.min(maxW, Math.max(176, ow + (ev.clientX - sx))));
+        cur.h = Math.round(Math.min(240, Math.max(42, oh + (ev.clientY - sy))));
+        bar.classList.add('st-bs-widget-custom');
+        bar.style.width = `${cur.w}px`;
+        bar.style.minHeight = `${cur.h}px`;
+      };
+      const finish = (ev) => {
+        if (!activeDrag || (ev && ev.pointerId !== pid)) return;
+        activeDrag = false;
+        document.removeEventListener('touchmove', preventScroll, { passive: false });
+        window.removeEventListener('pointermove', onMove, { passive: false });
+        window.removeEventListener('pointerup', finish);
+        window.removeEventListener('pointercancel', finish);
+        try { resizeHandle.releasePointerCapture(pid); } catch (_) {}
+      };
+      document.addEventListener('touchmove', preventScroll, { passive: false });
+      window.addEventListener('pointermove', onMove, { passive: false });
+      window.addEventListener('pointerup', finish);
+      window.addEventListener('pointercancel', finish);
+    });
+
+    // 右侧绿色小勾勾确认保存
+    confirmBtn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      bar.removeEventListener('pointerdown', onCardDragDown);
+      bar.classList.remove('st-bs-widget-editing');
+      bar.querySelectorAll('.st-bs-w-ctrl').forEach((n) => n.remove());
+      const toSave = {};
+      if (cur.x) toSave.x = cur.x;
+      if (cur.y) toSave.y = cur.y;
+      if (Number.isFinite(cur.w)) toSave.w = cur.w;
+      if (Number.isFinite(cur.h)) toSave.h = cur.h;
+      if (Number.isFinite(cur.fontSize)) toSave.fontSize = cur.fontSize;
+      saveWidgetLayout(mode, Object.keys(toSave).length ? toSave : null);
+      applyWidgetLayout(bar, mode);
+      notify('success', '已确认卡片位置与大小');
+    });
+  }
+
+  function openWidgetGlassMenu(bar, mode) {
+    closeGlassMenu();
+    const bd = document.createElement('div');
+    bd.id = 'st-bs-glass-backdrop';
+    stopDrawerClose(bd);
+
+    const l = getWidgetLayout(mode) || {};
+    const hasCustomPos = Number.isFinite(l.x) || Number.isFinite(l.y) || Number.isFinite(l.w) || Number.isFinite(l.h);
+
+    const menu = document.createElement('div');
+    menu.className = 'st-bs-glass-menu';
+    menu.innerHTML = `
+      <button type="button" class="st-bs-glass-item" data-gact="edit"><i class="fa-solid fa-up-down-left-right"></i><span>编辑卡片</span></button>
+      <button type="button" class="st-bs-glass-item" data-gact="font"><i class="fa-solid fa-text-height"></i><span>字体大小</span></button>
+      ${hasCustomPos ? '<button type="button" class="st-bs-glass-item danger" data-gact="reset"><i class="fa-solid fa-circle-minus"></i><span>恢复默认位置</span></button>' : ''}`;
+
+    placeGlassPopover(bar, menu, 184, hasCustomPos ? 148 : 102);
+
+    menu.querySelector('[data-gact="edit"]').onclick = () => {
+      closeGlassMenu();
+      enterWidgetEditMode(bar, mode);
+    };
+    menu.querySelector('[data-gact="font"]').onclick = () => {
+      openFontSizeGlassBar(bar, mode);
+    };
+    menu.querySelector('[data-gact="reset"]')?.addEventListener('click', () => {
+      closeGlassMenu();
+      const cur = getWidgetLayout(mode) || {};
+      const kept = Number.isFinite(cur.fontSize) ? { fontSize: cur.fontSize } : null;
+      saveWidgetLayout(mode, kept);
+      applyWidgetLayout(bar, mode);
+      notify('info', '已恢复默认位置与大小（字体大小已保留）');
+    });
+
+    bindGlassOutsideDismiss(bd, menu, closeGlassMenu);
+    bd.appendChild(menu);
+    document.documentElement.appendChild(bd);
+  }
+
+  function setupWidgetBar(bar, mode) {
+    applyWidgetLayout(bar, mode);
+    let lpTimer = null;
+    let sx = 0, sy = 0;
+    let suppressClickUntil = 0;
+
+    const clearSel = () => {
+      try { window.getSelection?.()?.removeAllRanges?.(); } catch (_) {}
+    };
+
+    const unlockSelect = () => {
+      document.documentElement.classList.remove('st-bs-no-select');
+    };
+
+    bar.addEventListener('click', (e) => {
+      if (Date.now() < suppressClickUntil) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+      }
+    }, true);
+
+    bar.addEventListener('contextmenu', (e) => { e.preventDefault(); });
+    bar.addEventListener('selectstart', (e) => { e.preventDefault(); });
+
+    bar.addEventListener('pointerdown', (e) => {
+      if (bar.classList.contains('st-bs-widget-editing')) return;
+      if (e.button && e.button !== 0) return;
+      sx = e.clientX; sy = e.clientY;
+      document.documentElement.classList.add('st-bs-no-select');
+      clearSel();
+      bar.classList.add('st-bs-pressing');
+      clearTimeout(lpTimer);
+      lpTimer = setTimeout(() => {
+        lpTimer = null;
+        bar.classList.remove('st-bs-pressing');
+        suppressClickUntil = Date.now() + 450;
+        clearSel();
+        openWidgetGlassMenu(bar, mode);
+        setTimeout(clearSel, 60);
+      }, 380);
+    });
+
+    const cancelLP = () => {
+      if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+      bar.classList.remove('st-bs-pressing');
+      setTimeout(unlockSelect, 80);
+    };
+
+    bar.addEventListener('pointermove', (e) => {
+      if (!lpTimer) return;
+      if (Math.hypot(e.clientX - sx, e.clientY - sy) > 9) cancelLP();
+    });
+    bar.addEventListener('pointerup', cancelLP);
+    bar.addEventListener('pointercancel', cancelLP);
+    bar.addEventListener('touchend', cancelLP, { passive: true });
+    bar.addEventListener('touchcancel', cancelLP, { passive: true });
+  }
+
   function createBar(mode) {
     const bar = document.createElement('div');
     bar.className = 'st-bs-bar'; bar.setAttribute('data-bs-bar', mode);
@@ -1671,6 +2017,7 @@
       setBulkMode(mode, !state[mode].bulk);
     });
     bar.querySelector('.st-bs-bulk-toggle').classList.toggle('active', state[mode].bulk);
+    setupWidgetBar(bar, mode);
     return bar;
   }
 

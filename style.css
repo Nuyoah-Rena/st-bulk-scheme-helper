@@ -1425,3 +1425,293 @@ mark.st-bs-hl {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* ===== iOS 液态磨砂玻璃卡片编辑 & 字体大小 ===== */
+.st-bs-bar {
+  position: relative;
+  flex: 0 0 100%;
+  width: 100%;
+  box-sizing: border-box;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+.st-bs-bar.st-bs-widget-custom {
+  flex: 0 0 auto !important;
+}
+
+.st-bs-bar.st-bs-has-fs,
+.st-bs-bar.st-bs-has-fs .st-bs-scheme-trigger,
+.st-bs-bar.st-bs-has-fs .st-bs-mini-btn {
+  font-size: var(--st-bs-fs) !important;
+}
+
+.st-bs-bar.st-bs-has-fs .st-bs-scheme-trigger,
+.st-bs-bar.st-bs-has-fs .st-bs-mini-btn {
+  height: calc(var(--st-bs-fs) + 19px) !important;
+  min-width: calc(var(--st-bs-fs) + 19px) !important;
+}
+
+.st-bs-bar.st-bs-pressing {
+  transform: scale(0.975);
+}
+
+.st-bs-bar.st-bs-widget-editing {
+  z-index: 60 !important;
+  border: 1.5px dashed #9b6b78 !important;
+  box-shadow: 0 8px 26px rgba(155, 107, 120, 0.28) !important;
+  padding-right: 42px !important;
+  padding-bottom: 14px !important;
+  align-content: center;
+}
+
+.st-bs-bar.st-bs-widget-editing > :not(.st-bs-w-ctrl) {
+  pointer-events: none !important;
+  opacity: 0.72;
+}
+
+.st-bs-w-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-height: 30px;
+  align-self: stretch;
+  margin: 0 2px 0 -2px;
+  border-radius: 8px;
+  background: rgba(155, 107, 120, 0.14);
+  color: #7d4e5b;
+  font-size: 14px;
+  cursor: grab;
+  flex-shrink: 0;
+  touch-action: none;
+  pointer-events: auto !important;
+}
+
+.st-bs-w-move:active {
+  cursor: grabbing;
+  background: #9b6b78;
+  color: #ffffff;
+}
+
+.st-bs-w-confirm {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  margin: 0;
+  background: #22c55e;
+  color: #ffffff;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 10px rgba(34, 197, 94, 0.4);
+  cursor: pointer;
+  z-index: 3;
+  touch-action: manipulation;
+  pointer-events: auto !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.st-bs-w-confirm:active {
+  transform: translateY(-50%) scale(0.9);
+}
+
+.st-bs-w-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #8b626e;
+  cursor: nwse-resize;
+  z-index: 4;
+  touch-action: none;
+  pointer-events: auto !important;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.st-bs-w-resize:active {
+  color: #9b6b78;
+  transform: scale(1.15);
+}
+
+/* 图二同款：iOS 液态磨砂玻璃长按菜单与字号条 */
+#st-bs-glass-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 2147483646 !important;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.st-bs-glass-menu {
+  position: fixed !important;
+  z-index: 2147483647 !important;
+  min-width: 176px;
+  padding: 6px;
+  border-radius: 22px;
+  background: rgba(52, 48, 52, 0.56);
+  backdrop-filter: blur(26px) saturate(185%);
+  -webkit-backdrop-filter: blur(26px) saturate(185%);
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  box-sizing: border-box;
+  animation: stBsGlassPop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  touch-action: manipulation;
+}
+
+@keyframes stBsGlassPop {
+  from { opacity: 0; transform: scale(0.86); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.st-bs-glass-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 14px;
+  border: none;
+  border-radius: 15px;
+  background: transparent;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.st-bs-glass-item:active {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.st-bs-glass-item.danger {
+  color: #ff7b7b;
+}
+
+.st-bs-glass-item + .st-bs-glass-item {
+  margin-top: 2px;
+}
+
+.st-bs-glass-item i {
+  width: 18px;
+  text-align: center;
+  font-size: 15px;
+}
+
+.st-bs-glass-fs {
+  min-width: 264px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #ffffff;
+}
+
+.st-bs-glass-fs-step {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.st-bs-glass-fs-step:active {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.st-bs-glass-fs-range {
+  flex: 1;
+  min-width: 90px;
+  accent-color: #ffffff;
+  margin: 0;
+}
+
+.st-bs-glass-fs-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  min-width: 34px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.st-bs-glass-fs-ok {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: #22c55e;
+  color: #ffffff;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+
+/* widget-free-drag */
+.st-bs-bar {
+  max-width: calc(100vw - 12px) !important;
+}
+
+.st-bs-bar.st-bs-widget-editing {
+  cursor: grab;
+  touch-action: none !important;
+}
+
+.st-bs-bar.st-bs-widget-editing:active {
+  cursor: grabbing;
+}
+
+
+/* glass-backdrop-ios-fix */
+#st-bs-glass-backdrop {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  cursor: pointer !important;
+  touch-action: manipulation !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+
+/* 彻底防止 iOS 长按卡片触发整屏蓝色全选 */
+.st-bs-bar,
+.st-bs-bar * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+html.st-bs-no-select,
+html.st-bs-no-select * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
