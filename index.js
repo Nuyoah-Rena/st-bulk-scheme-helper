@@ -1293,6 +1293,7 @@
 
   /* ================== 批量操作 ================== */
   async function bulkToggle(mode, enable) {
+    pruneHiddenSelection(mode);
     const ids = Array.from(state[mode].selected);
     if (!ids.length) return notify('warning', '请先勾选至少一个条目');
     const idSet = new Set(ids);
@@ -1337,6 +1338,7 @@
   }
 
   async function bulkExport(mode) {
+    pruneHiddenSelection(mode);
     const ids = Array.from(state[mode].selected);
     if (!ids.length) return notify('warning', '请先勾选要导出的条目');
     const idSet = new Set(ids), stamp = new Date().toISOString().slice(0, 10);
@@ -1360,6 +1362,7 @@
   }
 
   async function bulkDelete(mode) {
+    pruneHiddenSelection(mode);
     const ids = Array.from(state[mode].selected);
     if (!ids.length) return notify('warning', '请先勾选要删除的条目');
     if (!(await showConfirm({ title: '确认批量删除', desc: `确定删除选中的 ${ids.length} 条${mode === 'preset' ? '预设' : '世界书'}条目吗？删除后不可恢复。`, okText: '确认删除', danger: true }))) return;
@@ -1445,6 +1448,29 @@
     });
   }
 
+  function pruneHiddenSelection(mode, visibleItems = null) {
+    const st = state[mode];
+    if (!st.bulk || !st.selected.size) return false;
+    if (mode === 'preset' && state.presetSwitching) return false;
+    if (!isDrawerListOpen(mode)) return false;
+    const list = document.querySelector(mode === 'preset' ? '#completion_prompt_manager_list' : '#world_popup_entries_list');
+    if (!list || list.children.length === 0) return false;
+
+    const items = visibleItems || getItems(mode);
+    const visibleIds = new Set(items.map((el) => getItemId(mode, el)).filter(Boolean));
+    let removed = false;
+    st.selected.forEach((id) => {
+      if (!visibleIds.has(id)) {
+        st.selected.delete(id);
+        removed = true;
+      }
+    });
+    if (st.rangeAnchor && !visibleIds.has(st.rangeAnchor)) {
+      st.rangeAnchor = null;
+    }
+    return removed;
+  }
+
   function injectCheckboxes(mode) {
     const list = document.querySelector(mode === 'preset' ? '#completion_prompt_manager_list' : '#world_popup_entries_list');
     if (!list) return;
@@ -1455,8 +1481,10 @@
       list.querySelectorAll('.st-bs-item-checked').forEach((n) => n.classList.remove('st-bs-item-checked'));
       return;
     }
+    const visibleItems = getItems(mode);
+    pruneHiddenSelection(mode, visibleItems);
     const sel = state[mode].selected;
-    getItems(mode).forEach((el) => {
+    visibleItems.forEach((el) => {
       const id = getItemId(mode, el);
       if (!id) return;
       const target = mode === 'preset' ? (el.querySelector('.completion_prompt_manager_prompt_name') || el) : (el.querySelector('.inline-drawer-header') || el);
@@ -1528,8 +1556,11 @@
       const mode = state.activeDockMode, act = btn.getAttribute('data-act');
       if (act === 'all') {
         const items = getItems(mode), sel = state[mode].selected;
-        if (sel.size > 0 && sel.size >= items.length) sel.clear();
-        else items.forEach((el) => { const id = getItemId(mode, el); if (id) sel.add(id); });
+        pruneHiddenSelection(mode, items);
+        const visibleIds = items.map((el) => getItemId(mode, el)).filter(Boolean);
+        const allSel = visibleIds.length > 0 && visibleIds.every((id) => sel.has(id));
+        if (allSel) sel.clear();
+        else visibleIds.forEach((id) => sel.add(id));
         syncCheckboxes(mode); updateDockUI();
       } else if (act === 'on') bulkToggle(mode, true);
       else if (act === 'off') bulkToggle(mode, false);
@@ -1557,9 +1588,13 @@
     if (!activeMode) return;
 
     dock.style.top = `${Math.round(window.innerHeight / 2)}px`;
-    const st = state[activeMode], total = st.total ?? getItems(activeMode).length;
+    const st = state[activeMode];
+    const visibleItems = getItems(activeMode);
+    pruneHiddenSelection(activeMode, visibleItems);
+    const visibleIds = visibleItems.map((el) => getItemId(activeMode, el)).filter(Boolean);
+    const allSel = visibleIds.length > 0 && visibleIds.every((id) => st.selected.has(id));
     dock.querySelector('.st-bs-dock-count').textContent = String(st.selected.size);
-    dock.querySelector('.st-bs-dock-sub').textContent = (total > 0 && st.selected.size >= total) ? '清空' : '全选';
+    dock.querySelector('.st-bs-dock-sub').textContent = allSel ? '清空' : '全选';
     dock.querySelector('.st-bs-dock-range').classList.toggle('active', st.rangeMode);
     dock.querySelector('.st-bs-dock-archive').style.display = activeMode === 'preset' ? '' : 'none';
     dock.classList.toggle('folded', state.dockFolded);
@@ -1774,12 +1809,12 @@
       fontSize: Number.isFinite(saved.fontSize) ? saved.fontSize : null,
     };
 
-    const confirmBtn = document.createElement('button');
-    confirmBtn.type = 'button';
-    confirmBtn.className = 'st-bs-w-ctrl st-bs-w-confirm';
-    confirmBtn.title = '确认位置与大小';
-    confirmBtn.innerHTML = '<i class="fa-solid fa-check"></i>';
-    bar.appendChild(confirmBtn);
+    const actions = document.createElement('div');
+    actions.className = 'st-bs-w-ctrl st-bs-w-actions';
+    actions.innerHTML = `
+      <button type="button" class="st-bs-w-act-btn st-bs-w-cancel-btn" data-wact="cancel" title="取消编辑"><i class="fa-solid fa-xmark"></i></button>
+      <button type="button" class="st-bs-w-act-btn st-bs-w-confirm-btn" data-wact="confirm" title="确认位置与大小"><i class="fa-solid fa-check"></i></button>`;
+    bar.appendChild(actions);
 
     const resizeHandle = document.createElement('span');
     resizeHandle.className = 'st-bs-w-ctrl st-bs-w-resize';
@@ -1791,10 +1826,9 @@
     const preventScroll = (ev) => { if (activeDrag) ev.preventDefault(); };
     const MARGIN = 6;
 
-    // 整个卡片任意位置按住都能拖动（自动锁死左右边界，绝不拖出屏幕）
     const onCardDragDown = (e) => {
       if (!bar.classList.contains('st-bs-widget-editing')) return;
-      if (e.target?.closest?.('.st-bs-w-resize, .st-bs-w-confirm')) return;
+      if (e.target?.closest?.('.st-bs-w-resize, .st-bs-w-actions')) return;
       if (e.button && e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
       activeDrag = true;
@@ -1831,7 +1865,6 @@
     };
     bar.addEventListener('pointerdown', onCardDragDown);
 
-    // 右下角拖动大小（最大宽度锁死到屏幕右边缘，绝不拉出屏）
     resizeHandle.addEventListener('pointerdown', (e) => {
       if (e.button && e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
@@ -1867,12 +1900,22 @@
       window.addEventListener('pointercancel', finish);
     });
 
-    // 右侧绿色小勾勾确认保存
-    confirmBtn.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
+    const exitEdit = () => {
       bar.removeEventListener('pointerdown', onCardDragDown);
       bar.classList.remove('st-bs-widget-editing');
       bar.querySelectorAll('.st-bs-w-ctrl').forEach((n) => n.remove());
+    };
+
+    actions.querySelector('[data-wact="cancel"]').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      exitEdit();
+      applyWidgetLayout(bar, mode);
+      notify('info', '已取消编辑');
+    });
+
+    actions.querySelector('[data-wact="confirm"]').addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      exitEdit();
       const toSave = {};
       if (cur.x) toSave.x = cur.x;
       if (cur.y) toSave.y = cur.y;
@@ -2287,6 +2330,7 @@
 
   // 悬浮条「存底」：勾选的条目写进记录表，同名覆盖
   function archiveSelected() {
+    pruneHiddenSelection('preset');
     const ids = Array.from(state.preset.selected);
     if (!ids.length) return notify('warning', '请先勾选要存底的条目');
     const pm = getPM(), order = getPresetOrder();
