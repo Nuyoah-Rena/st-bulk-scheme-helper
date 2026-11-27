@@ -12,7 +12,7 @@
 2. 粘贴本仓库地址：
 
    ```
-   https://github.com/<你的GitHub用户名>/st-bulk-scheme-helper
+   [https://github.com/<你的GitHub用户名>/st-bulk-scheme-helper](https://github.com/Nuyoah-Rena/st-bulk-scheme-helper.git)
    ```
 
 3. 安装完成后刷新页面。打开预设列表或世界书，列表上方出现方案栏即表示加载成功。
