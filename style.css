@@ -1717,7 +1717,7 @@ html.st-bs-no-select * {
 }
 
 
-/* ===== 卡片编辑态：红叉 + 绿勾放到虚线框底下 ===== */
+/* ===== 卡片编辑态：红叉 + 绿勾放到虚线框底下（无背景实心红❌绿✔） ===== */
 .st-bs-bar.st-bs-widget-editing {
   padding-right: 8px !important;
   overflow: visible !important;
@@ -1726,25 +1726,24 @@ html.st-bs-no-select * {
 .st-bs-w-actions {
   position: absolute !important;
   left: 50% !important;
-  top: calc(100% + 8px) !important;
+  top: calc(100% + 5px) !important;
   transform: translateX(-50%) !important;
   display: inline-flex !important;
   align-items: center;
-  gap: 12px;
+  gap: 18px;
   z-index: 10;
   pointer-events: auto !important;
   touch-action: manipulation;
 }
 
 .st-bs-w-act-btn {
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: none;
+  width: 32px;
+  height: 32px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
   padding: 0;
   margin: 0;
-  color: #ffffff;
-  font-size: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1753,18 +1752,13 @@ html.st-bs-no-select * {
   pointer-events: auto !important;
   -webkit-tap-highlight-color: transparent;
   transition: transform 0.12s ease;
+  filter: drop-shadow(0 1px 2px rgba(255, 255, 255, 0.88));
 }
 
 .st-bs-w-act-btn:active {
-  transform: scale(0.88);
+  transform: scale(0.85);
 }
 
-.st-bs-w-cancel-btn {
-  background: #ef4444;
-  box-shadow: 0 3px 10px rgba(239, 68, 68, 0.38);
-}
-
-.st-bs-w-confirm-btn {
-  background: #22c55e;
-  box-shadow: 0 3px 10px rgba(34, 197, 94, 0.38);
+.st-bs-w-act-btn svg {
+  display: block;
 }

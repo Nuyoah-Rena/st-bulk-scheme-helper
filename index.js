@@ -1809,12 +1809,24 @@
       fontSize: Number.isFinite(saved.fontSize) ? saved.fontSize : null,
     };
 
-    const actions = document.createElement('div');
-    actions.className = 'st-bs-w-ctrl st-bs-w-actions';
-    actions.innerHTML = `
-      <button type="button" class="st-bs-w-act-btn st-bs-w-cancel-btn" data-wact="cancel" title="取消编辑"><i class="fa-solid fa-xmark"></i></button>
-      <button type="button" class="st-bs-w-act-btn st-bs-w-confirm-btn" data-wact="confirm" title="确认位置与大小"><i class="fa-solid fa-check"></i></button>`;
-    bar.appendChild(actions);
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'st-bs-w-ctrl st-bs-w-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.type = 'button';
+    cancelBtn.className = 'st-bs-w-act-btn st-bs-w-cancel-btn';
+    cancelBtn.title = '取消编辑';
+    cancelBtn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true"><path d="M6 6L18 18M18 6L6 18" stroke="#ef4444" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.type = 'button';
+    confirmBtn.className = 'st-bs-w-act-btn st-bs-w-confirm-btn';
+    confirmBtn.title = '确认位置与大小';
+    confirmBtn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true"><path d="M4.5 12.8L9.6 18L19.5 6.8" stroke="#22c55e" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    actionsWrap.appendChild(cancelBtn);
+    actionsWrap.appendChild(confirmBtn);
+    bar.appendChild(actionsWrap);
 
     const resizeHandle = document.createElement('span');
     resizeHandle.className = 'st-bs-w-ctrl st-bs-w-resize';
@@ -1828,7 +1840,7 @@
 
     const onCardDragDown = (e) => {
       if (!bar.classList.contains('st-bs-widget-editing')) return;
-      if (e.target?.closest?.('.st-bs-w-resize, .st-bs-w-actions')) return;
+      if (e.target?.closest?.('.st-bs-w-resize, .st-bs-w-actions, .st-bs-w-act-btn')) return;
       if (e.button && e.button !== 0) return;
       e.preventDefault(); e.stopPropagation();
       activeDrag = true;
@@ -1906,14 +1918,14 @@
       bar.querySelectorAll('.st-bs-w-ctrl').forEach((n) => n.remove());
     };
 
-    actions.querySelector('[data-wact="cancel"]').addEventListener('click', (e) => {
+    cancelBtn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       exitEdit();
       applyWidgetLayout(bar, mode);
-      notify('info', '已取消编辑');
+      notify('info', '已取消编辑卡片');
     });
 
-    actions.querySelector('[data-wact="confirm"]').addEventListener('click', (e) => {
+    confirmBtn.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
       exitEdit();
       const toSave = {};
