@@ -182,6 +182,7 @@
   /* ===== 预设方案存进预设文件本身（随预设导出/导入/改名） ===== */
   const PRESET_EXT_PATH = 'stBulkSchemeHelper.schemes';
   const migratingPresets = new Set();
+  const unsavedMergedPresets = new Set();
 
   function getPresetExtApi() {
     const pm = getCtx().getPresetManager?.('openai');
@@ -202,6 +203,9 @@
     const fromPreset = pm.readPresetExtensionField({ path: PRESET_EXT_PATH });
     if (fromPreset && typeof fromPreset === 'object') {
       s.presetSchemes[pname] = structuredClone(fromPreset);
+    } else if (unsavedMergedPresets.has(pname)) {
+      delete s.presetSchemes[pname];
+      unsavedMergedPresets.delete(pname);
     } else if (Object.keys(s.presetSchemes[pname] || {}).length && !migratingPresets.has(pname)) {
       migratingPresets.add(pname);
       pm.writePresetExtensionField({ path: PRESET_EXT_PATH, value: structuredClone(s.presetSchemes[pname]) })
@@ -270,6 +274,7 @@
 
   /* ================== 弹窗（挂到 html 根节点，永不被 body 偏移） ================== */
   function ensureModal() {
+    hideRecDock();
     let bd = document.getElementById('st-bs-modal-backdrop');
     if (!bd) {
       bd = document.createElement('div');
@@ -283,7 +288,7 @@
     return bd;
   }
 
-  const closeModal = () => document.getElementById('st-bs-modal-backdrop')?.classList.remove('open');
+  const closeModal = () => { hideRecDock(); document.getElementById('st-bs-modal-backdrop')?.classList.remove('open'); };
 
   function showConfirm({ title, desc, okText = '确认', cancelText = '取消', danger = false }) {
     return new Promise((resolve) => {
@@ -361,7 +366,7 @@
   }
 
   // 仅按住最左侧「三横」把手可拖动排序；其他区域长按/滑动完全不触发，防误触
-  function bindHandleDrag(container, itemSelector, onReorder) {
+  function bindHandleDrag(container, itemSelector, onReorder, scroller = container) {
     if (!container || container.dataset.stDragBound) return;
     container.dataset.stDragBound = '1';
 
@@ -417,15 +422,15 @@
 
       const autoScroll = () => {
         if (!dragging) return;
-        const cr = container.getBoundingClientRect();
+        const cr = scroller.getBoundingClientRect();
         const edge = 36;
         let delta = 0;
         if (lastY < cr.top + edge) delta = -Math.ceil((cr.top + edge - lastY) / 5);
         else if (lastY > cr.bottom - edge) delta = Math.ceil((lastY - (cr.bottom - edge)) / 5);
         if (delta !== 0) {
-          const prev = container.scrollTop;
-          container.scrollTop += delta;
-          if (container.scrollTop !== prev) updateSwap(lastY);
+          const prev = scroller.scrollTop;
+          scroller.scrollTop += delta;
+          if (scroller.scrollTop !== prev) updateSwap(lastY);
         }
         rafId = requestAnimationFrame(autoScroll);
       };
@@ -483,7 +488,7 @@
     const bd = ensureModal(), card = bd.querySelector('.st-bs-modal-card');
     card.innerHTML = `
       <div class="st-bs-modal-title">切换开关方案</div>
-      <div class="st-bs-modal-desc">当前${mode === 'preset' ? '预设' : '世界书'}：「${targetName}」</div>
+      <div class="st-bs-modal-desc">当前${mode === 'preset' ? '预设' : '世界书'}：「${escapeHtml(targetName)}」</div>
       ${mode === 'preset' && names.length ? '<button type="button" class="st-bs-btn" data-act="refresh" style="width:100%;margin:0 0 10px;"><i class="fa-solid fa-rotate"></i> 刷新全部方案</button>' : ''}
       ${curBind ? `<button type="button" class="st-bs-btn" data-act="unbind-cur" style="width:100%;margin:0 0 10px;color:#c94a5a;border-color:rgba(201,74,90,0.38);"><i class="fa-solid fa-link-slash"></i> 解绑当前聊天窗口（已绑：${escapeHtml(curBindLabel)}）</button>` : ''}
       <div class="st-bs-scheme-list"></div>
@@ -599,7 +604,7 @@
     card.querySelector('[data-act="close"]').onclick = closeModal;
     card.querySelector('[data-act="add"]').onclick = () => showSaveSchemeModal(mode, false, '');
     const refreshBtn = card.querySelector('[data-act="refresh"]');
-    if (refreshBtn) refreshBtn.onclick = () => refreshAllPresetSchemes();
+    if (refreshBtn) refreshBtn.onclick = () => { refreshAllPresetSchemes(); showSchemePickerModal(mode); };
     const unbindCurBtn = card.querySelector('[data-act="unbind-cur"]');
     if (unbindCurBtn) {
       unbindCurBtn.onclick = () => {
@@ -1278,7 +1283,7 @@
             }
           });
           await saveWI(targetName, data, true);
-          reloadWorldUI();
+          if (getWorldName() === targetName) reloadWorldUI();
           if (sc) setTimeout(() => { sc.scrollTop = prev; }, 180);
           if (state.world.bulk) setTimeout(() => injectCheckboxes('world'), 200);
         }
@@ -1426,6 +1431,7 @@
   function onRangeBtn() {
     const mode = state.activeDockMode;
     if (!mode) return;
+    pruneHiddenSelection(mode);
     const st = state[mode];
     if (!st.rangeMode && st.selected.size >= 2) {
       const c = fillRange(mode);
@@ -1719,6 +1725,7 @@
 
   function closeGlassMenu() {
     document.getElementById('st-bs-glass-backdrop')?.remove();
+    document.documentElement.classList.remove('st-bs-no-select');
   }
 
   function bindGlassOutsideDismiss(bd, panel, onDismiss) {
@@ -1848,16 +1855,20 @@
 
       const rect = bar.getBoundingClientRect();
       const baseLeft = rect.left - cur.x;
+      const baseTop = rect.top - cur.y;
       const minX = Math.round(MARGIN - baseLeft);
       const maxX = Math.max(minX, Math.round(window.innerWidth - MARGIN - rect.width - baseLeft));
+      const minY = Math.round(MARGIN - baseTop);
+      const maxY = Math.max(minY, Math.round(window.innerHeight - 54 - rect.height - baseTop));
       const pid = e.pointerId, sx = e.clientX, sy = e.clientY, ox = cur.x, oy = cur.y;
 
       const onMove = (ev) => {
         if (!activeDrag || ev.pointerId !== pid) return;
         ev.preventDefault();
         const rawX = Math.round(ox + (ev.clientX - sx));
+        const rawY = Math.round(oy + (ev.clientY - sy));
         cur.x = Math.min(maxX, Math.max(minX, rawX));
-        cur.y = Math.round(oy + (ev.clientY - sy));
+        cur.y = Math.min(maxY, Math.max(minY, rawY));
         bar.style.left = `${cur.x}px`;
         bar.style.top = `${cur.y}px`;
       };
@@ -1984,6 +1995,7 @@
     let lpTimer = null;
     let sx = 0, sy = 0;
     let suppressClickUntil = 0;
+    let winBound = false;
 
     const clearSel = () => {
       try { window.getSelection?.()?.removeAllRanges?.(); } catch (_) {}
@@ -1991,6 +2003,22 @@
 
     const unlockSelect = () => {
       document.documentElement.classList.remove('st-bs-no-select');
+    };
+
+    const unbindWinEnd = () => {
+      if (!winBound) return;
+      winBound = false;
+      window.removeEventListener('pointerup', cancelLP, true);
+      window.removeEventListener('pointercancel', cancelLP, true);
+      window.removeEventListener('touchend', cancelLP, true);
+      window.removeEventListener('touchcancel', cancelLP, true);
+    };
+
+    const cancelLP = () => {
+      if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
+      bar.classList.remove('st-bs-pressing');
+      unbindWinEnd();
+      setTimeout(unlockSelect, 80);
     };
 
     bar.addEventListener('click', (e) => {
@@ -2012,6 +2040,13 @@
       clearSel();
       bar.classList.add('st-bs-pressing');
       clearTimeout(lpTimer);
+      if (!winBound) {
+        winBound = true;
+        window.addEventListener('pointerup', cancelLP, true);
+        window.addEventListener('pointercancel', cancelLP, true);
+        window.addEventListener('touchend', cancelLP, true);
+        window.addEventListener('touchcancel', cancelLP, true);
+      }
       lpTimer = setTimeout(() => {
         lpTimer = null;
         bar.classList.remove('st-bs-pressing');
@@ -2022,20 +2057,10 @@
       }, 380);
     });
 
-    const cancelLP = () => {
-      if (lpTimer) { clearTimeout(lpTimer); lpTimer = null; }
-      bar.classList.remove('st-bs-pressing');
-      setTimeout(unlockSelect, 80);
-    };
-
     bar.addEventListener('pointermove', (e) => {
       if (!lpTimer) return;
       if (Math.hypot(e.clientX - sx, e.clientY - sy) > 9) cancelLP();
     });
-    bar.addEventListener('pointerup', cancelLP);
-    bar.addEventListener('pointercancel', cancelLP);
-    bar.addEventListener('touchend', cancelLP, { passive: true });
-    bar.addEventListener('touchcancel', cancelLP, { passive: true });
   }
 
   function createBar(mode) {
@@ -2386,6 +2411,9 @@
       records,
       recordSchemes,
       recordOrder: pick,
+      recordGroups: getRecordGroupList()
+        .map((g) => ({ name: g.name, members: pick.filter((n) => getRecordGroupStore().of[n] === g.id) }))
+        .filter((g) => !names?.length || g.members.length),
     });
     notify('success', `已导出 ${pick.length} 条记录${names?.length ? '（已选）' : '（全部）'}`);
   }
@@ -2421,8 +2449,19 @@
           const rs = getRecordSchemes();
           Object.entries(data.recordSchemes).forEach(([sn, members]) => { if (Array.isArray(members)) { rs[sn] = members; schemeN++; } });
         }
+        let groupN = 0;
+        if (Array.isArray(data.recordGroups)) {
+          const rgs = getRecordGroupStore();
+          data.recordGroups.forEach((g) => {
+            const gname = String(g?.name || '').trim();
+            if (!gname) return;
+            let grp = rgs.list.find((x) => x && x.name === gname);
+            if (!grp) { grp = { id: newGroupId(), name: gname }; rgs.list.push(grp); groupN++; }
+            (Array.isArray(g.members) ? g.members : []).forEach((n) => { if (hasOwn(records, n)) rgs.of[n] = grp.id; });
+          });
+        }
         saveRecords();
-        notify('success', `已导入记录表：新增 ${added} 条，覆盖 ${overwritten} 条${schemeN ? `，记录方案 ${schemeN} 个` : ''}`);
+        notify('success', `已导入记录表：新增 ${added} 条，覆盖 ${overwritten} 条${schemeN ? `，记录方案 ${schemeN} 个` : ''}${groupN ? `，新分组 ${groupN} 个` : ''}`);
         onDone?.();
       } catch (_) {
         notify('error', '这不是记录表文件');
@@ -2651,24 +2690,134 @@
     return row;
   }
 
+  /* ---------- 记录表分组（自建分组，手动归类） ---------- */
+  function getRecordGroupStore() {
+    const s = getRawStore();
+    if (!s.recordGroups || typeof s.recordGroups !== 'object') s.recordGroups = {};
+    const rg = s.recordGroups;
+    if (!Array.isArray(rg.list)) rg.list = [];
+    if (!rg.of || typeof rg.of !== 'object') rg.of = {};
+    if (!rg.collapsed || typeof rg.collapsed !== 'object') rg.collapsed = {};
+    return rg;
+  }
+
+  function getRecordGroupList() {
+    return getRecordGroupStore().list.filter((g) => g && g.id && g.name);
+  }
+
+  function groupIdOf(name) {
+    const rg = getRecordGroupStore(), id = rg.of[name];
+    return id && rg.list.some((g) => g && g.id === id) ? id : null;
+  }
+
+  const newGroupId = () => `g${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+
+  // 清掉已删除记录 / 已解除分组留下的残留
+  function pruneRecordGroups() {
+    const rg = getRecordGroupStore(), all = getRecords();
+    const ids = new Set(rg.list.filter((g) => g && g.id).map((g) => g.id));
+    let changed = false;
+    Object.keys(rg.of).forEach((n) => { if (!hasOwn(all, n) || !ids.has(rg.of[n])) { delete rg.of[n]; changed = true; } });
+    Object.keys(rg.collapsed).forEach((id) => { if (!ids.has(id)) { delete rg.collapsed[id]; changed = true; } });
+    if (changed) saveRecords();
+  }
+
+  // gid 为 null 表示移回「未分组」
+  function moveRecordsToGroup(names, gid) {
+    const rg = getRecordGroupStore();
+    names.forEach((n) => { if (gid) rg.of[n] = gid; else delete rg.of[n]; });
+    saveRecords();
+  }
+
+  /* ---------- 记录表：左侧悬浮列 + 右侧中间折叠键（挂在 html 上，最高层） ---------- */
+  let recDockCtx = null;
+  let recDockFolded = false;
+
+  function ensureRecDock() {
+    let dock = document.getElementById('st-bs-rec-dock');
+    if (dock) return dock;
+    dock = document.createElement('div');
+    dock.id = 'st-bs-rec-dock';
+    dock.innerHTML = `
+      <button type="button" class="st-bs-dock-circle" data-ract="all" title="全选 / 清空">
+        <span class="st-bs-dock-count">0</span><span class="st-bs-dock-sub">全选</span>
+      </button>
+      <button type="button" class="st-bs-dock-circle st-bs-dock-range" data-ract="range" title="区间选择"><i class="fa-solid fa-arrows-up-down"></i></button>
+      <button type="button" class="st-bs-dock-circle" data-ract="rscheme" title="记录方案"><i class="fa-solid fa-layer-group"></i></button>
+      <button type="button" class="st-bs-dock-circle" data-ract="group" data-manage title="放进分组 / 新建分组"><i class="fa-solid fa-plus"></i></button>
+      <button type="button" class="st-bs-dock-circle st-bs-dock-danger" data-ract="del" data-manage title="删除 / 移出分组"><i class="fa-solid fa-trash-can"></i></button>
+      <button type="button" class="st-bs-dock-circle" data-ract="fold" title="收起成小球"><i class="fa-solid fa-chevron-left"></i></button>
+      <button type="button" class="st-bs-dock-circle st-bs-dock-ball" data-ract="unfold" title="展开"><span class="st-bs-dock-ball-count">0</span></button>`;
+    stopDrawerClose(dock);
+    dock.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-ract]');
+      if (!btn || !recDockCtx) return;
+      const act = btn.getAttribute('data-ract');
+      if (act === 'fold') { recDockFolded = true; updateRecDock(); return; }
+      if (act === 'unfold') { recDockFolded = false; updateRecDock(); return; }
+      recDockCtx.onAct(act);
+    });
+    document.documentElement.appendChild(dock);
+    window.addEventListener('resize', () => { if (recDockCtx) updateRecDock(); });
+    return dock;
+  }
+
+  function ensureRecFoldBtn() {
+    let btn = document.getElementById('st-bs-rec-fold-btn');
+    if (btn) return btn;
+    btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'st-bs-rec-fold-btn';
+    btn.title = '折叠中间这一组';
+    btn.innerHTML = '<i class="fa-solid fa-angles-up"></i>';
+    stopDrawerClose(btn);
+    btn.addEventListener('click', () => recDockCtx?.foldMiddle());
+    document.documentElement.appendChild(btn);
+    return btn;
+  }
+
+  function updateRecDock() {
+    const c = recDockCtx;
+    if (!c) return;
+    const dock = ensureRecDock(), fb = ensureRecFoldBtn();
+    const sel = c.ui.selected, t = c.getTarget();
+    const allSel = t.length > 0 && t.every((n) => sel.has(n));
+    dock.querySelector('.st-bs-dock-count').textContent = String(sel.size);
+    dock.querySelector('.st-bs-dock-ball-count').textContent = String(sel.size);
+    dock.querySelector('.st-bs-dock-sub').textContent = allSel ? '清空' : '全选';
+    dock.querySelector('[data-ract="range"]').classList.toggle('active', c.ui.rangeMode);
+    dock.querySelectorAll('[data-manage]').forEach((b) => { b.style.display = c.manage ? '' : 'none'; });
+    dock.classList.toggle('folded', recDockFolded);
+    dock.classList.add('visible');
+    const top = `${Math.round(window.innerHeight / 2)}px`;
+    dock.style.top = top;
+    fb.style.top = top;
+    fb.classList.toggle('visible', c.canFold());
+  }
+
+  function hideRecDock() {
+    recDockCtx = null;
+    document.getElementById('st-bs-rec-dock')?.classList.remove('visible');
+    document.getElementById('st-bs-rec-fold-btn')?.classList.remove('visible');
+  }
+
   function showRecordsModal(mode = 'manage', targetId = null) {
     const ui = mode === 'insert' ? insUi : recUi;
+    const manage = mode === 'manage';
+    ui.searchFold ||= new Set();
+    if (!ui.query) ui.searchFold.clear();
     const target = mode === 'insert' ? getPM()?.getPromptById?.(targetId) : null;
     const bd = ensureModal(), card = bd.querySelector('.st-bs-modal-card');
     card.innerHTML = `
       <div class="st-bs-modal-title"></div>
       <div class="st-bs-modal-desc"></div>
-      ${mode === 'manage' ? `<div class="st-bs-rec-actions">
+      ${manage ? `<div class="st-bs-rec-actions">
         <button type="button" class="st-bs-btn st-bs-btn-primary" data-act="place"><i class="fa-solid fa-arrow-right-to-bracket"></i> 放进当前预设</button>
         <button type="button" class="st-bs-btn" data-act="merge"><i class="fa-solid fa-code-merge"></i> 版本升级融合</button>
       </div>` : ''}
       <div class="st-bs-rec-toolbar">
         <button type="button" class="st-bs-sel-btn" data-act="sel">已选 <b data-role="selcount">0</b> 条 <i class="fa-solid fa-list"></i></button>
         <div class="st-bs-rec-tools">
-          <button type="button" class="st-bs-icon-btn" data-act="rscheme" title="记录方案"><i class="fa-solid fa-layer-group"></i></button>
-          <button type="button" class="st-bs-icon-btn st-bs-all-btn" data-act="all" title="一键全选 / 一键清空">全选</button>
-          <button type="button" class="st-bs-icon-btn" data-act="range" title="区间选择：点开头和结尾，中间全选"><i class="fa-solid fa-arrows-up-down"></i></button>
-          ${mode === 'manage' ? '<button type="button" class="st-bs-icon-btn st-bs-icon-danger" data-act="del" title="删除已选记录"><i class="fa-solid fa-trash-can"></i></button>' : ''}
           <button type="button" class="st-bs-icon-btn" data-act="search" title="查找"><i class="fa-solid fa-magnifying-glass"></i></button>
         </div>
       </div>
@@ -2681,7 +2830,7 @@
       </div>
       <div class="st-bs-scheme-list st-bs-record-list"></div>
       <div class="st-bs-modal-actions st-bs-modal-actions-wrap">
-        ${mode === 'manage'
+        ${manage
           ? `<button type="button" class="st-bs-btn" data-act="export"><i class="fa-solid fa-file-export"></i> 导出</button>
              <button type="button" class="st-bs-btn" data-act="import"><i class="fa-solid fa-file-import"></i> 导入</button>
              <button type="button" class="st-bs-btn" data-act="close">关闭</button>`
@@ -2702,7 +2851,9 @@
       if (!existsCache.has(r.name)) existsCache.set(r.name, recordExistsInCurrent(r));
       return existsCache.get(r.name);
     };
-    let shownNames = [];
+    let shownNames = [];   // 看得见、可选的条目（展开的分组 + 未分组），按显示顺序
+    let targetNames = [];  // 「全选 / 清空」作用的条目
+    let canFold = false;   // 有没有展开着的分组
     const reopen = () => showRecordsModal(mode, targetId);
 
     const pruneSelection = () => { const all = getRecords(); ui.selected.forEach((n) => { if (!hasOwn(all, n) || isExisting(all[n])) ui.selected.delete(n); }); };
@@ -2710,9 +2861,7 @@
     const renderCount = () => {
       pruneSelection();
       card.querySelector('[data-role="selcount"]').textContent = String(ui.selected.size);
-      const allShownSelected = shownNames.length > 0 && shownNames.every((n) => ui.selected.has(n));
-      card.querySelector('[data-act="all"]').textContent = allShownSelected ? '清空' : '全选';
-      card.querySelector('[data-act="range"]').classList.toggle('active', ui.rangeMode);
+      updateRecDock();
     };
 
     const showSelectedPopup = () => openSubPopup(bd, (box, close) => {
@@ -2733,43 +2882,345 @@
       draw();
     });
 
-    bindHandleDrag(list, '.st-bs-record-card', (newKeys) => {
+    // 搜索时有命中的分组临时展开（点标题可临时收起），不改记住的折叠状态
+    const isFolded = (gid) => (ui.query.trim() ? ui.searchFold.has(gid) : Boolean(getRecordGroupStore().collapsed[gid]));
+    const toggleFold = (gid) => {
+      if (ui.query.trim()) {
+        if (ui.searchFold.has(gid)) ui.searchFold.delete(gid); else ui.searchFold.add(gid);
+      } else {
+        const rg = getRecordGroupStore();
+        if (rg.collapsed[gid]) delete rg.collapsed[gid]; else rg.collapsed[gid] = true;
+        saveRecords();
+      }
+      renderList();
+    };
+
+    // 右侧圆钮：折叠列表中间那一组，并把它的标题留在眼前
+    const foldMiddle = () => {
+      const lr = list.getBoundingClientRect(), mid = lr.top + lr.height / 2;
+      let best = null, bestVis = 0;
+      list.querySelectorAll(':scope > .st-bs-rg:not(.folded)').forEach((b) => {
+        const r = b.getBoundingClientRect();
+        const vis = Math.min(r.bottom, lr.bottom) - Math.max(r.top, lr.top);
+        if (vis <= 0) return;
+        if (r.top <= mid && r.bottom >= mid) { best = b; bestVis = Infinity; return; }
+        if (vis > bestVis) { best = b; bestVis = vis; }
+      });
+      if (!best) return;
+      const gid = best.dataset.gid;
+      toggleFold(gid);
+      const head = list.querySelector(`:scope > .st-bs-rg[data-gid="${CSS.escape(gid)}"] > .st-bs-rg-head`);
+      if (head) {
+        const hr = head.getBoundingClientRect(), lr2 = list.getBoundingClientRect();
+        if (hr.top < lr2.top || hr.bottom > lr2.bottom) list.scrollTop += hr.top - lr2.top - 4;
+      }
+    };
+
+    // 组内拖动：只在本组里换位置，写回记录表的整体顺序
+    const onCardReorder = (newKeys) => {
       if (ui.query.trim()) return;
-      setRecordOrder(newKeys);
-      const all = getRecords();
-      shownNames = newKeys.filter((n) => hasOwn(all, n) && !isExisting(all[n]));
+      const order = getOrderedRecordNames(), keySet = new Set(newKeys), slots = [];
+      order.forEach((n, i) => { if (keySet.has(n)) slots.push(i); });
+      if (slots.length !== newKeys.length) return renderList();
+      slots.forEach((pos, k) => { order[pos] = newKeys[k]; });
+      setRecordOrder(order);
+      renderList();
+    };
+
+    // 分组标题的 ≡：拖动调整分组顺序（仅管理模式）
+    if (manage) {
+      bindHandleDrag(list, '.st-bs-rg', (newKeys) => {
+        if (ui.query.trim()) return renderList();
+        const rg = getRecordGroupStore(), byId = new Map(rg.list.map((g) => [g?.id, g]));
+        const next = newKeys.map((id) => byId.get(id)).filter(Boolean);
+        rg.list.forEach((g) => { if (!next.includes(g)) next.push(g); });
+        rg.list = next;
+        saveRecords();
+        renderList();
+      });
+    }
+
+    const makeCard = (r, q) => buildRecordCard(r, {
+      mode, ui, q, exists: isExisting(r), draggable: !q,
+      onToggle: (row) => {
+        if (ui.rangeMode) {
+          ui.selected.add(r.name);
+          if (!ui.rangeAnchor) { ui.rangeAnchor = r.name; notify('info', '已选开头，请再点结尾条目'); renderList(); return; }
+          const i1 = shownNames.indexOf(ui.rangeAnchor), i2 = shownNames.indexOf(r.name);
+          if (i1 >= 0 && i2 >= 0) shownNames.slice(Math.min(i1, i2), Math.max(i1, i2) + 1).forEach((n) => ui.selected.add(n));
+          notify('success', `已区间选中 ${Math.abs(i2 - i1) + 1} 条`);
+          ui.rangeMode = false; ui.rangeAnchor = null;
+          renderList(); return;
+        }
+        if (ui.selected.has(r.name)) ui.selected.delete(r.name); else ui.selected.add(r.name);
+        row.classList.toggle('selected', ui.selected.has(r.name));
+        renderCount();
+      },
+      onView: () => showRecordPreview(r.name, ui.query.trim(), reopen),
+      onDelete: null,
     });
 
+    const renameGroupPopup = (g) => openSubPopup(bd, (box, close) => {
+      box.innerHTML = `
+        <div class="st-bs-modal-title">重命名分组</div>
+        <div class="st-bs-search-capsule st-bs-subpop-input"><input type="text" class="st-bs-search-input" /></div>
+        <div class="st-bs-modal-actions">
+          <button type="button" class="st-bs-btn" data-sub="no">取消</button>
+          <button type="button" class="st-bs-btn st-bs-btn-primary" data-sub="yes">确定</button>
+        </div>`;
+      const inp = box.querySelector('input');
+      inp.value = g.name;
+      const ok = () => {
+        const name = inp.value.trim();
+        if (!name) return notify('warning', '请输入分组名称');
+        if (name === g.name) return close();
+        if (getRecordGroupList().some((x) => x.name === name)) return notify('warning', `已经有叫「${name}」的分组了`);
+        g.name = name;
+        saveRecords(); close(); renderList();
+        notify('success', `已重命名为「${name}」`);
+      };
+      box.querySelector('[data-sub="no"]').onclick = close;
+      box.querySelector('[data-sub="yes"]').onclick = ok;
+      inp.onkeydown = (e) => { if (e.key === 'Enter') ok(); };
+      setTimeout(() => inp.focus(), 30);
+    });
+
+    const ungroupPopup = (g) => openSubPopup(bd, (box, close) => {
+      const cnt = Object.values(getRecordGroupStore().of).filter((id) => id === g.id).length;
+      box.innerHTML = `
+        <div class="st-bs-modal-title"></div>
+        <div class="st-bs-modal-desc"></div>
+        <div class="st-bs-modal-actions">
+          <button type="button" class="st-bs-btn" data-sub="no">取消</button>
+          <button type="button" class="st-bs-btn st-bs-btn-danger" data-sub="yes">解除分组</button>
+        </div>`;
+      box.querySelector('.st-bs-modal-title').textContent = `解除分组「${g.name}」？`;
+      box.querySelector('.st-bs-modal-desc').textContent = `组内 ${cnt} 条会回到「未分组」，不会删除记录。`;
+      box.querySelector('[data-sub="no"]').onclick = close;
+      box.querySelector('[data-sub="yes"]').onclick = () => {
+        const rg = getRecordGroupStore();
+        rg.list = rg.list.filter((x) => x && x.id !== g.id);
+        Object.keys(rg.of).forEach((n) => { if (rg.of[n] === g.id) delete rg.of[n]; });
+        delete rg.collapsed[g.id];
+        saveRecords(); close(); renderList();
+        notify('info', `已解除分组「${g.name}」，${cnt} 条回到未分组`);
+      };
+    });
+
+    // ➕：有选中 → 选分组放进去（也可新建）；没选中 → 新建空分组
+    const showGroupPicker = () => {
+      pruneSelection();
+      const names = getOrderedRecordNames().filter((n) => ui.selected.has(n));
+      openSubPopup(bd, (box, close) => {
+        const groups = getRecordGroupList(), rg = getRecordGroupStore();
+        box.innerHTML = `
+          <div class="st-bs-modal-title">${names.length ? `放进分组（已选 ${names.length} 条）` : '新建分组'}</div>
+          <div class="st-bs-modal-desc">${names.length ? '点一个分组，已选条目就会放进去；也可以在下面新建。' : '还没有选中条目，可以先建一个空分组。'}</div>
+          ${names.length ? '<div class="st-bs-subpop-list" data-role="glist"></div>' : ''}
+          <div class="st-bs-search-capsule st-bs-subpop-input"><input type="text" class="st-bs-search-input" placeholder="新分组名称" /></div>
+          <div class="st-bs-modal-actions">
+            <button type="button" class="st-bs-btn" data-sub="close">关闭</button>
+            <button type="button" class="st-bs-btn st-bs-btn-primary" data-sub="create">${names.length ? '新建并放入' : '新建分组'}</button>
+          </div>`;
+        const ul = box.querySelector('[data-role="glist"]');
+        if (ul) {
+          if (!groups.length) ul.innerHTML = '<div class="st-bs-sel-empty">还没有分组，在下面输入名称新建。</div>';
+          groups.forEach((g) => {
+            const cnt = Object.values(rg.of).filter((id) => id === g.id).length;
+            const row = document.createElement('div');
+            row.className = 'st-bs-sel-item st-bs-rg-pick';
+            row.innerHTML = '<i class="fa-solid fa-folder" style="opacity:.55;"></i><span class="st-bs-sel-name"></span><small style="opacity:.6;"></small>';
+            row.querySelector('.st-bs-sel-name').textContent = g.name;
+            row.querySelector('small').textContent = `${cnt} 条`;
+            row.onclick = () => {
+              moveRecordsToGroup(names, g.id);
+              names.forEach((n) => ui.selected.delete(n));
+              close(); renderList();
+              notify('success', `已把 ${names.length} 条放进「${g.name}」`);
+            };
+            ul.appendChild(row);
+          });
+        }
+        const inp = box.querySelector('input');
+        const create = () => {
+          const name = inp.value.trim();
+          if (!name) return notify('warning', '请输入分组名称');
+          if (getRecordGroupList().some((x) => x.name === name)) {
+            return notify('warning', `已经有叫「${name}」的分组了${names.length ? '，直接点上面的分组即可' : ''}`);
+          }
+          const g = { id: newGroupId(), name };
+          getRecordGroupStore().list.push(g);
+          if (names.length) { moveRecordsToGroup(names, g.id); names.forEach((n) => ui.selected.delete(n)); } else saveRecords();
+          close(); renderList();
+          notify('success', names.length ? `已新建「${name}」并放进 ${names.length} 条` : `已新建分组「${name}」`);
+        };
+        box.querySelector('[data-sub="close"]').onclick = close;
+        box.querySelector('[data-sub="create"]').onclick = create;
+        inp.onkeydown = (e) => { if (e.key === 'Enter') create(); };
+      });
+    };
+
+    // 🗑：删除记录，或把分组里的条目移回「未分组」
+    const showDeletePopup = () => {
+      pruneSelection();
+      const pick = getOrderedRecordNames().filter((n) => ui.selected.has(n));
+      if (!pick.length) return notify('warning', '请先选中要删除的记录');
+      const inGroup = pick.filter((n) => groupIdOf(n));
+      const gName = new Map(getRecordGroupList().map((g) => [g.id, g.name]));
+      openSubPopup(bd, (box, closeSub) => {
+        box.innerHTML = `
+          <div class="st-bs-modal-title">已选记录（${pick.length} 条）</div>
+          <div class="st-bs-modal-desc"></div>
+          <div class="st-bs-subpop-list"></div>
+          <div class="st-bs-del-actions">
+            ${inGroup.length ? `<button type="button" class="st-bs-btn" data-sub="out">移出分组（${inGroup.length}）</button>` : ''}
+            <button type="button" class="st-bs-btn st-bs-btn-danger" data-sub="yes">移出记录表</button>
+            <button type="button" class="st-bs-btn" data-sub="no">取消</button>
+          </div>`;
+        box.querySelector('.st-bs-modal-desc').textContent = inGroup.length
+          ? `「移出记录表」会把以下条目从记录表删掉（不影响预设里的条目）；只想让分组里的 ${inGroup.length} 条回到「未分组」，点「移出分组」。`
+          : '「移出记录表」会把以下条目从记录表删掉（不影响预设里的条目）。';
+        const ul = box.querySelector('.st-bs-subpop-list');
+        pick.forEach((n) => {
+          const item = document.createElement('div');
+          item.className = 'st-bs-sel-item';
+          item.innerHTML = '<span class="st-bs-sel-name"></span><small style="opacity:.6;flex-shrink:0;"></small>';
+          item.querySelector('span').textContent = n;
+          const gid = groupIdOf(n);
+          item.querySelector('small').textContent = gid ? gName.get(gid) || '' : '';
+          ul.appendChild(item);
+        });
+        box.querySelector('[data-sub="no"]').onclick = closeSub;
+        box.querySelector('[data-sub="out"]')?.addEventListener('click', () => {
+          moveRecordsToGroup(inGroup, null);
+          inGroup.forEach((n) => ui.selected.delete(n));
+          closeSub(); renderList();
+          notify('success', `已把 ${inGroup.length} 条移出分组`);
+        });
+        box.querySelector('[data-sub="yes"]').onclick = () => {
+          const all = getRecords(), rg = getRecordGroupStore();
+          pick.forEach((n) => { delete all[n]; delete rg.of[n]; ui.selected.delete(n); });
+          const s = getRawStore();
+          if (Array.isArray(s.recordOrder)) {
+            const delSet = new Set(pick);
+            s.recordOrder = s.recordOrder.filter((n) => !delSet.has(n));
+          }
+          saveRecords();
+          closeSub(); renderList();
+          notify('success', `已从记录表删除 ${pick.length} 条记录`);
+        };
+      });
+    };
+
+    const onAct = (act) => {
+      if (act === 'all') {
+        if (!targetNames.length) return notify('info', '没有可以选的条目');
+        const allSel = targetNames.every((n) => ui.selected.has(n));
+        targetNames.forEach((n) => (allSel ? ui.selected.delete(n) : ui.selected.add(n)));
+        renderList();
+      } else if (act === 'range') {
+        const pickedIdx = shownNames.map((n, i) => (ui.selected.has(n) ? i : -1)).filter((i) => i >= 0);
+        if (!ui.rangeMode && pickedIdx.length >= 2) {
+          const slice = shownNames.slice(pickedIdx[0], pickedIdx[pickedIdx.length - 1] + 1);
+          slice.forEach((n) => ui.selected.add(n));
+          notify('success', `已区间选中 ${slice.length} 条`);
+          renderList();
+          return;
+        }
+        ui.rangeMode = !ui.rangeMode;
+        if (ui.rangeMode) {
+          ui.rangeAnchor = pickedIdx.length === 1 ? shownNames[pickedIdx[0]] : null;
+          notify('info', ui.rangeAnchor ? '区间选择：请再点另一端条目' : '区间选择：请依次点开头和结尾条目');
+        } else {
+          ui.rangeAnchor = null;
+        }
+        renderCount();
+      } else if (act === 'rscheme') {
+        showRecordSchemePopup(bd, { mode, ui, isExisting, onDone: renderList });
+        bd.querySelector(':scope > .st-bs-subpop')?.classList.add('st-bs-subpop-solo');
+      } else if (act === 'group' && manage) {
+        showGroupPicker();
+      } else if (act === 'del' && manage) {
+        showDeletePopup();
+      }
+    };
+
     const renderList = () => {
+      pruneRecordGroups();
       const all = getOrderedRecords();
       card.querySelector('.st-bs-modal-title').textContent = mode === 'insert' ? `从记录表插入（${all.length}）` : `记录表（${all.length}）`;
       const q = ui.query.trim(), ql = q.toLowerCase();
       const shown = q ? all.filter((r) => r.name.toLowerCase().includes(ql) || String(r.prompt?.content || '').toLowerCase().includes(ql)) : all;
-      shownNames = shown.filter((r) => !isExisting(r)).map((r) => r.name);
+      const groups = getRecordGroupList();
+      const byGroup = new Map(groups.map((g) => [g.id, []]));
+      const loose = [];
+      shown.forEach((r) => { const gid = groupIdOf(r.name); (gid && byGroup.has(gid) ? byGroup.get(gid) : loose).push(r); });
+
+      const expandedSel = [], looseSel = [];
+      let headers = 0;
+      canFold = false;
       list.innerHTML = '';
-      if (!all.length) list.innerHTML = '<div class="st-bs-record-empty">还没有记录。在批量编辑里勾选条目，点悬浮条上的「存底」即可记录。</div>';
-      else if (!shown.length) list.innerHTML = '<div class="st-bs-record-empty">没有找到匹配的条目。</div>';
-      shown.forEach((r) => {
-        list.appendChild(buildRecordCard(r, {
-          mode, ui, q, exists: isExisting(r), draggable: !q,
-          onToggle: (row) => {
-            if (ui.rangeMode) {
-              ui.selected.add(r.name);
-              if (!ui.rangeAnchor) { ui.rangeAnchor = r.name; notify('info', '已选开头，请再点结尾条目'); renderList(); return; }
-              const i1 = shownNames.indexOf(ui.rangeAnchor), i2 = shownNames.indexOf(r.name);
-              if (i1 >= 0 && i2 >= 0) shownNames.slice(Math.min(i1, i2), Math.max(i1, i2) + 1).forEach((n) => ui.selected.add(n));
-              notify('success', `已区间选中 ${Math.abs(i2 - i1) + 1} 条`);
-              ui.rangeMode = false; ui.rangeAnchor = null;
-              renderList(); return;
-            }
-            if (ui.selected.has(r.name)) ui.selected.delete(r.name); else ui.selected.add(r.name);
-            row.classList.toggle('selected', ui.selected.has(r.name));
-            renderCount();
-          },
-          onView: () => showRecordPreview(r.name, ui.query.trim(), reopen),
-          onDelete: null,
-        }));
+
+      groups.forEach((g) => {
+        const members = byGroup.get(g.id);
+        if (q && !members.length) return;
+        headers++;
+        const folded = isFolded(g.id);
+        const block = document.createElement('div');
+        block.className = 'st-bs-rg' + (folded ? ' folded' : '');
+        block.dataset.dragKey = g.id;
+        block.dataset.gid = g.id;
+        block.innerHTML = `
+          <div class="st-bs-rg-head">
+            ${manage && !q ? '<span class="st-bs-drag-handle" title="按住拖动分组排序"><i class="fa-solid fa-bars"></i></span>' : ''}
+            <i class="fa-solid fa-chevron-${folded ? 'right' : 'down'} st-bs-rg-caret"></i>
+            <span class="st-bs-rg-name"></span>
+            <span class="st-bs-rg-count">（${members.length}）</span>
+            ${manage ? `<button type="button" class="st-bs-rg-btn" data-rg="rename" title="重命名分组">${PENCIL_SVG}</button>
+            <button type="button" class="st-bs-rg-btn danger" data-rg="ungroup" title="解除分组（不删除条目）"><i class="fa-solid fa-xmark"></i></button>` : ''}
+          </div>`;
+        block.querySelector('.st-bs-rg-name').textContent = g.name;
+        block.querySelector('.st-bs-rg-head').addEventListener('click', (e) => {
+          if (e.target.closest('[data-rg], .st-bs-drag-handle')) return;
+          toggleFold(g.id);
+        });
+        block.querySelector('[data-rg="rename"]')?.addEventListener('click', (e) => { e.stopPropagation(); renameGroupPopup(g); });
+        block.querySelector('[data-rg="ungroup"]')?.addEventListener('click', (e) => { e.stopPropagation(); ungroupPopup(g); });
+        if (!folded) {
+          canFold = true;
+          const body = document.createElement('div');
+          body.className = 'st-bs-rg-body';
+          if (!members.length) body.innerHTML = `<div class="st-bs-rg-empty">（空）${manage ? '选中条目后点左边的 ➕ 放进来' : ''}</div>`;
+          members.forEach((r) => {
+            body.appendChild(makeCard(r, q));
+            if (!isExisting(r)) expandedSel.push(r.name);
+          });
+          block.appendChild(body);
+          if (!q) bindHandleDrag(body, '.st-bs-record-card', onCardReorder, list);
+        }
+        list.appendChild(block);
       });
+
+      if (loose.length) {
+        const block = document.createElement('div');
+        block.className = 'st-bs-rg-none';
+        if (headers) block.innerHTML = `<div class="st-bs-rg-none-head">未分组（${loose.length}）</div>`;
+        const body = document.createElement('div');
+        body.className = 'st-bs-rg-none-body';
+        loose.forEach((r) => {
+          body.appendChild(makeCard(r, q));
+          if (!isExisting(r)) looseSel.push(r.name);
+        });
+        block.appendChild(body);
+        if (!q) bindHandleDrag(body, '.st-bs-record-card', onCardReorder, list);
+        list.appendChild(block);
+      }
+
+      if (q && !shown.length) list.innerHTML = '<div class="st-bs-record-empty">没有找到匹配的条目。</div>';
+      else if (!all.length) list.insertAdjacentHTML('beforeend', '<div class="st-bs-record-empty">还没有记录。在批量编辑里勾选条目，点悬浮条上的「存底」即可记录。</div>');
+
+      shownNames = [...expandedSel, ...looseSel];
+      targetNames = expandedSel.length ? expandedSel : looseSel;
       renderCount();
     };
 
@@ -2781,84 +3232,18 @@
     };
 
     input.value = ui.query;
-    input.addEventListener('input', () => { ui.query = input.value; renderSearch(); renderList(); });
-    card.querySelector('[data-act="clear"]').onclick = () => { ui.query = ''; input.value = ''; renderSearch(); renderList(); input.focus(); };
+    input.addEventListener('input', () => { ui.query = input.value; ui.searchFold.clear(); renderSearch(); renderList(); });
+    card.querySelector('[data-act="clear"]').onclick = () => { ui.query = ''; input.value = ''; ui.searchFold.clear(); renderSearch(); renderList(); input.focus(); };
     hlBtn.onclick = () => { setHighlight(!isHighlightOn()); renderSearch(); renderList(); };
     card.querySelector('[data-act="search"]').onclick = () => {
       ui.searchOpen = !ui.searchOpen;
-      if (!ui.searchOpen) { ui.query = ''; input.value = ''; renderList(); }
+      if (!ui.searchOpen) { ui.query = ''; input.value = ''; ui.searchFold.clear(); renderList(); }
       renderSearch();
       if (ui.searchOpen) setTimeout(() => input.focus(), 30);
     };
     card.querySelector('[data-act="sel"]').onclick = () => showSelectedPopup();
-    card.querySelector('[data-act="all"]').onclick = () => {
-      if (!shownNames.length) return;
-      const allSel = shownNames.every((n) => ui.selected.has(n));
-      shownNames.forEach((n) => (allSel ? ui.selected.delete(n) : ui.selected.add(n)));
-      renderList();
-    };
-    card.querySelector('[data-act="range"]').onclick = () => {
-      const pickedIdx = shownNames.map((n, i) => (ui.selected.has(n) ? i : -1)).filter((i) => i >= 0);
-      if (!ui.rangeMode && pickedIdx.length >= 2) {
-        const slice = shownNames.slice(pickedIdx[0], pickedIdx[pickedIdx.length - 1] + 1);
-        slice.forEach((n) => ui.selected.add(n));
-        notify('success', `已区间选中 ${slice.length} 条`);
-        renderList();
-        return;
-      }
-      ui.rangeMode = !ui.rangeMode;
-      if (ui.rangeMode) {
-        ui.rangeAnchor = pickedIdx.length === 1 ? shownNames[pickedIdx[0]] : null;
-        notify('info', ui.rangeAnchor ? '区间选择：请再点另一端条目' : '区间选择：请依次点开头和结尾条目');
-      } else {
-        ui.rangeAnchor = null;
-      }
-      renderCount();
-    };
-    card.querySelector('[data-act="rscheme"]').onclick = () => showRecordSchemePopup(bd, { mode, ui, isExisting, onDone: renderList });
-    card.querySelector('[data-act="del"]')?.addEventListener('click', () => {
-      pruneSelection();
-      const ordered = typeof getOrderedRecordNames === 'function' ? getOrderedRecordNames() : Object.keys(getRecords());
-      const pick = ordered.filter((n) => ui.selected.has(n));
-      if (!pick.length) return notify('warning', '请先选中要删除的记录');
-      openSubPopup(bd, (box, closeSub) => {
-        box.innerHTML = `
-          <div class="st-bs-modal-title">删除已选记录（${pick.length} 条）</div>
-          <div class="st-bs-modal-desc">确定从记录表删除以下条目吗？（不会影响预设里的条目）</div>
-          <div class="st-bs-subpop-list"></div>
-          <div class="st-bs-modal-actions">
-            <button type="button" class="st-bs-btn" data-sub="no">取消</button>
-            <button type="button" class="st-bs-btn st-bs-btn-danger" data-sub="yes">确认删除</button>
-          </div>`;
-        const ul = box.querySelector('.st-bs-subpop-list');
-        pick.forEach((n) => {
-          const item = document.createElement('div');
-          item.className = 'st-bs-sel-item';
-          item.innerHTML = '<span class="st-bs-sel-name"></span>';
-          item.querySelector('span').textContent = n;
-          ul.appendChild(item);
-        });
-        box.querySelector('[data-sub="no"]').onclick = closeSub;
-        box.querySelector('[data-sub="yes"]').onclick = () => {
-          const all = getRecords();
-          pick.forEach((n) => {
-            delete all[n];
-            ui.selected.delete(n);
-          });
-          const s = getRawStore();
-          if (Array.isArray(s.recordOrder)) {
-            const delSet = new Set(pick);
-            s.recordOrder = s.recordOrder.filter((n) => !delSet.has(n));
-          }
-          saveRecords();
-          closeSub();
-          renderList();
-          notify('success', `已从记录表删除 ${pick.length} 条记录`);
-        };
-      });
-    });
 
-    if (mode === 'manage') {
+    if (manage) {
       card.querySelector('[data-act="merge"]').onclick = () => showMergePicker();
       card.querySelector('[data-act="place"]').onclick = () => placeSelectedIntoCurrent();
       card.querySelector('[data-act="export"]').onclick = () => exportRecords(Array.from(ui.selected));
@@ -2881,6 +3266,7 @@
     }
     bd.onclick = (e) => { if (e.target === bd) { resetUi(ui); closeModal(); } };
 
+    recDockCtx = { manage, ui, onAct, foldMiddle, getTarget: () => targetNames, canFold: () => canFold };
     renderSearch(); renderList();
     bd.classList.add('open');
   }
@@ -3153,6 +3539,7 @@
         });
         ext.schemes = { ...(ext.schemes || {}), ...plan.schemes };
         getRawStore().presetSchemes[getPresetName()] = structuredClone(ext.schemes);
+        if (getPresetExtApi()) unsavedMergedPresets.add(getPresetName());
       }
 
       // 5. 正则启用状态
@@ -3570,7 +3957,12 @@
         && JSON.stringify(prev.prompt) === JSON.stringify(rec.prompt)
         && JSON.stringify(prev.prev) === JSON.stringify(rec.prev) && JSON.stringify(prev.next) === JSON.stringify(rec.next);
       if (same) return;
-      if (prev && prev.name !== rec.name) delete records[prev.name];
+      if (prev && prev.name !== rec.name) {
+        delete records[prev.name];
+        const rg = getRecordGroupStore();
+        if (rg.of[prev.name] && !rg.of[rec.name]) rg.of[rec.name] = rg.of[prev.name];
+        delete rg.of[prev.name];
+      }
       records[rec.name] = rec; changed++;
     });
     if (changed) saveRecords();
@@ -3635,6 +4027,11 @@
       });
       if (ctx.event_types.OAI_PRESET_CHANGED_AFTER) ctx.eventSource.on(ctx.event_types.OAI_PRESET_CHANGED_AFTER, () => {
         state.presetSwitching = false;
+        const pname = getPresetName(), pmApi = getPresetExtApi();
+        if (pname && unsavedMergedPresets.has(pname) && pmApi && !pmApi.readPresetExtensionField({ path: PRESET_EXT_PATH })) {
+          delete getRawStore().presetSchemes[pname];
+          unsavedMergedPresets.delete(pname);
+        }
         mountBars(); refreshSchemeButton('preset');
         if (state.preset.bulk) injectCheckboxes('preset');
         updateDockUI();
